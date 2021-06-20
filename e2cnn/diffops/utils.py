@@ -9,7 +9,7 @@ import sparse
 import scipy.special  # type: ignore
 from sympy.calculus.finite_diff import finite_diff_weights
 from rbf.pde.fd import weight_matrix, weights # type: ignore
-from rbf.basis import set_symbolic_to_numeric_method, set_cache_dir, get_rbf
+from rbf.basis import set_symbolic_to_numeric_method, get_rbf
 from rbf.utils import KDTree
 
 set_symbolic_to_numeric_method('lambdify')
