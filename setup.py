@@ -13,7 +13,7 @@ install_requires = [
     'sparse',
     'torch-sparse',
     'cython',
-    'git+https://github.com/treverhines/RBF',
+    'RBF @ git+https://github.com/treverhines/RBF',
 ]
 
 
