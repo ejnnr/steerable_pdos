@@ -79,10 +79,11 @@ class DisentangleModule(EquivariantModule):
         
     def forward(self, input: GeometricTensor) -> GeometricTensor:
         assert input.type == self.in_type
+        in_grid = input.grid
         
         input = input.tensor
         
-        b, c, w, h = input.shape
+        b, c, *spatial = input.shape
         
         output = torch.empty_like(input)
         
@@ -102,11 +103,15 @@ class DisentangleModule(EquivariantModule):
                 input_fields = input[:, fiber_indices, ...]
             
             # reshape to align all the fields in order to exploit broadcasting
-            input_fields = input_fields.view(b, self._nfields[repr_name], self._sizes[repr_name], w, h)
+            input_fields = input_fields.view(b, self._nfields[repr_name], self._sizes[repr_name], *spatial)
             
             # TODO: can we exploit the fact the change of basis is a permutation matrix?
             # transform all the fields with the change of basis
-            transformed_fields = torch.einsum("oi,bciwh->bcowh", (cob, input_fields)).reshape(b, -1, w, h)
+            if len(spatial) == 2:
+                # regular grid
+                transformed_fields = torch.einsum("oi,bciwh->bcowh", (cob, input_fields)).reshape(b, -1, *spatial)
+            else:
+                transformed_fields = torch.einsum("oi,bcip->bcop", (cob, input_fields)).reshape(b, -1, *spatial)
             
             # insert the transformed fields in the output tensor
             if contiguous:
@@ -114,7 +119,7 @@ class DisentangleModule(EquivariantModule):
             else:
                 output[:, fiber_indices, ...] = transformed_fields
         
-        return GeometricTensor(output, self.out_type)
+        return GeometricTensor(output, self.out_type, in_grid)
     
     def evaluate_output_shape(self, input_shape: Tuple[int, ...]) -> Tuple[int, ...]:
         return input_shape

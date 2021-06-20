@@ -158,7 +158,7 @@ class TestConvolution(TestCase):
         r2 = FieldType(g, [g.regular_repr])
     
         s = 3
-        cl = R2Conv(r1, r2, s, bias=True, padding=1, padding_mode='reflect', initialize=False)
+        cl = R2Conv(r1, r2, s, bias=True, padding=1, padding_mode='reflect', init=None)
     
         for _ in range(32):
             init.generalized_he_init(cl.weights.data, cl.basisexpansion)
@@ -174,7 +174,7 @@ class TestConvolution(TestCase):
         for mode in ['circular', 'reflect', 'replicate']:
             for s in [3, 5, 7]:
                 padding = s // 2
-                cl = R2Conv(r1, r2, s, bias=True, padding=padding, padding_mode=mode, initialize=False)
+                cl = R2Conv(r1, r2, s, bias=True, padding=padding, padding_mode=mode, init=None)
             
                 for _ in range(10):
                     init.generalized_he_init(cl.weights.data, cl.basisexpansion)
@@ -197,7 +197,7 @@ class TestConvolution(TestCase):
                 for p in [0, 1, 2, 4]:
                     for s in [1, 2, 3]:
                         for mode in ['zeros', 'circular', 'reflect', 'replicate']:
-                            cl = R2Conv(r1, r2, k, padding=p, stride=s, padding_mode=mode, initialize=False).eval()
+                            cl = R2Conv(r1, r2, k, padding=p, stride=s, padding_mode=mode, init=None).eval()
                             y = cl(x)
                             _S = math.floor((S + 2*p - k) / s + 1)
                             self.assertEqual(y.shape, (1, r2.size, _S, _S))

@@ -2,11 +2,14 @@
 import itertools
 from e2cnn.kernels.basis import EmptyBasisException
 import numpy as np
+import torch
+from abc import ABC, abstractmethod
 from typing import Iterable, List, Optional, Union, Tuple
 
 from e2cnn.kernels import KernelBasis
 from e2cnn.group import SO2
-from .utils import discretize_homogeneous_polynomial, multiply_polynomials, laplacian_power, display_diffop, transform_polynomial
+from e2cnn.nn import HybridTensor
+from .utils import discretize_homogeneous_polynomial, max_partial_orders, multiply_polynomials, laplacian_power, display_diffop, rbffd_discretization, nearest_neighbors, transform_polynomial
 
 
 class DiffopBasis(KernelBasis):
@@ -50,38 +53,45 @@ class DiffopBasis(KernelBasis):
         super().__init__(dim, shape)
 
     def sample(self,
-               points: Union[np.ndarray, List[float], Tuple[List[float], List[float]]],
-               mask: np.ndarray = None,
-               smoothing: float = None,
-               angle_offset: float = None,
-               radial_basis_function: str = "ga",
-               ) -> np.ndarray:
-        r"""
-        Discretize the basis on a set of points.
+             points: Union[np.ndarray, List[float], Tuple[List[float], List[float]]],
+             out_coords: np.ndarray = None,
+             mask: np.ndarray = None,
+             num_neighbors: int = None,
+             smoothing: float = None,
+             accuracy: int = None,
+             angle_offset: float = None,
+             ) -> Union[np.ndarray, HybridTensor]:
+        """Discretize the basis on a set of points.
 
         Args:
             points (ndarray, tuple or list): To use RBF-FD, this has to be a
-                `2 x N` array with `N` points on which to discretize.
-                To use FD, this can be either a list of floats, which will be used
-                as the 1D coordinates on which to discretize, or a tuple of two such
-                lists, one for the x- and one for the y-axis.
-                You can also use RBF-FD on a regular grid,
-                in that case you need to pass in the grid coordinates explicitly as an array.
+              2 x N array with N points on which to discretize.
+              To use FD, this can be either a list of floats, which will be used
+              as the 1D coordinates on which to discretize, or a tuple of two such
+              lists, one for the x- and one for the y-axis.
+              You can also use RBF-FD on a regular kernel,
+              in that case you need to pass in the grid coordinates explicitly (see ``make_grid``).
+            out (ndarray, optional): array into which to write the output. Only supported if no custom
+              ``out_coords`` are set.
             mask (ndarray, optional): Boolean array of shape (dim, ), where ``dim`` is the number of basis elements.
-                True for elements to discretize and False for elements to discard.
-            smoothing (float, optional): if this is not ``None``, derivatives of Gaussians
-                are used for discretization, rather than FD or RBF-FD. In that case, ``points``
-                may have any of the three formats described above. ``smoothing`` is the standard
-                deviation of the Gaussian used for discretization.
-            angle_offset (float, optional): if not ``None``, rotate the PDOs by this many radians.
-            radial_basis_function (str, optional): which RBF to use (only relevant for RBF-FD).
-                Can be any of the abbreviations `here <https://rbf.readthedocs.io/en/latest/basis.html>`_.
+              True for elements to discretize and False for elements to discard.
+            out_coords (ndarray, optional): 2 x M array with output grid (i.e. points at which the
+              derivative is to be found). If None, only the derivative at zero is found.
+              Only supported for RBF-FD, so ``points`` needs to be an array if ``out_coords`` is not None.
+            num_neighbors (int, optional): number of nearest neighbors that will be used to create
+              a stencil. If no output coordinates are specified and this is None (the default),
+              all input points are used for the stencil. If output coordinates are passed, this
+              parameter must be set! Then each row of the output will have ``num_neighbors``
+              non-zero entries.
+              Note that if you set this parameter without specifying ``out_coords``, you will
+              still get a dense array, only with some entries zeroed out.
 
         Returns:
-            ndarray of with shape `(C_out, C_in, num_basis_elements, n_in)`, where
-            `num_basis_elements` are the number of elements after applying the mask, and `n_in` is the number
+            If ``out_coords`` is ``None``, ndarray of with shape (C_out, C_in, num_basis_elements, n_in), where
+            ``num_basis_elements`` are the number of elements after applying the mask, and ``n_in`` is the number
             of points.
-
+            Otherwise, a sparse.COO array of shape (c_out, c_in, num_basis_elements, n_out, n_in), where n_out
+            and n_in are the number of output and input points.
         """
         if mask is None:
             # if no mask is given, we use all basis elements
@@ -100,6 +110,49 @@ class DiffopBasis(KernelBasis):
 
         coefficients = (coeff for coeff, m in zip(coefficients, mask) if m)
 
+        if out_coords is None:
+            return self._sample_dense(coefficients, points, mask, num_neighbors, smoothing, accuracy)
+        else:
+            assert isinstance(points, np.ndarray)
+            assert isinstance(out_coords, np.ndarray)
+            assert isinstance(num_neighbors, int)
+            return self._sample_sparse(coefficients, points, out_coords, mask, num_neighbors)
+
+    def pretty_print(self):
+        out = ""
+        for element in self.coefficients:
+            out += display_matrix(element)
+            out += "\n----------------------------------\n"
+        return out
+    
+    def _sample_sparse(
+        self,
+        coefficients: Iterable[np.ndarray],
+        points: np.ndarray,
+        out_coords: np.ndarray,
+        mask: np.ndarray,
+        num_neighbors: int,
+    ) -> HybridTensor:
+        values = np.empty((np.sum(mask), ) + self.shape + (out_coords.shape[1], num_neighbors), dtype=np.float32)
+
+        indices, stencils = nearest_neighbors(points, out_coords, num_neighbors)
+
+        for k, element in enumerate(coefficients):
+            for i in range(self.shape[0]):
+                for j in range(self.shape[1]):
+                    values[k, i, j] = rbffd_discretization(element[i, j], out_coords, stencils)
+        
+        return HybridTensor(torch.from_numpy(indices).long(), torch.from_numpy(values), points.shape[1])
+    
+    def _sample_dense(
+        self,
+        coefficients: Iterable[np.ndarray],
+        points: Union[np.ndarray, List[float], Tuple[List[float], List[float]]],
+        mask: np.ndarray,
+        num_neighbors: Optional[int],
+        smoothing: Optional[float],
+        accuracy: Optional[int],
+    ) -> np.ndarray:
         if isinstance(points, np.ndarray):
             assert len(points.shape) == 2
             assert points.shape[0] == 2
@@ -121,20 +174,12 @@ class DiffopBasis(KernelBasis):
         for k, element in enumerate(coefficients):
             for i in range(self.shape[0]):
                 for j in range(self.shape[1]):
-                    basis[k, i, j] = discretize_homogeneous_polynomial(points, element[i, j], smoothing, phi=radial_basis_function)
+                    basis[k, i, j] = discretize_homogeneous_polynomial(points, element[i, j], num_neighbors, smoothing, accuracy)
 
         # Finally, we move the len_basis axis to the third position
         basis = basis.transpose(1, 2, 0, 3)
 
         return basis
-
-    def pretty_print(self) -> str:
-        """Return a human-readable representation of all basis elements."""
-        out = ""
-        for element in self.coefficients:
-            out += display_matrix(element)
-            out += "\n----------------------------------\n"
-        return out
 
 
 class LaplaceProfile(DiffopBasis):
@@ -231,6 +276,8 @@ class TensorBasis(DiffopBasis):
         attr["idx1"] = idx1
         attr["idx2"] = idx2
 
+        attr["max_x"], attr["max_y"] = max_partial_orders(self.coefficients[idx][0])
+
         return attr
 
     def __iter__(self):
@@ -244,6 +291,8 @@ class TensorBasis(DiffopBasis):
                 attr["idx"] = idx
                 attr["idx1"] = attr1["idx"]
                 attr["idx2"] = attr2["idx"]
+
+                attr["max_x"], attr["max_y"] = max_partial_orders(self.coefficients[idx][0])
 
                 yield attr
                 idx += 1

@@ -8,7 +8,7 @@ import numpy as np
 from typing import List, Iterable, Dict, Union
 
 
-__all__ = ["BasisExpansion"]
+__all__ = ["BasisExpansion", "DenseBasisExpansion"]
 
 
 class BasisExpansion(ABC, Module):
@@ -36,29 +36,6 @@ class BasisExpansion(ABC, Module):
         pass
 
     @abstractmethod
-    def get_basis_names(self) -> List[str]:
-        """
-        Method that returns the list of identification names of the basis elements
-        
-        Returns:
-            list of names
-        """
-        pass
-
-    @abstractmethod
-    def get_element_info(self, name: Union[str, int]) -> Dict:
-        """
-        Method that returns the information associated to a basis element
-        
-        Parameters:
-            name (str or int): identifier of the basis element or its index
-        
-        Returns:
-            dictionary containing the information
-        """
-        pass
-    
-    @abstractmethod
     def get_basis_info(self) -> Iterable:
         """
         Method that returns an iterable over all basis elements' attributes.
@@ -81,3 +58,31 @@ class BasisExpansion(ABC, Module):
         pass
 
 
+# NOTE: There is no deep reason not to also implement these methods
+# for sparse basis expansions, they just aren't needed and so far
+# are not implemented
+class DenseBasisExpansion(BasisExpansion):
+    pass
+
+    # @abstractmethod
+    # def get_basis_names(self) -> List[str]:
+    #     """
+    #     Method that returns the list of identification names of the basis elements
+
+    #     Returns:
+    #         list of names
+    #     """
+    #     pass
+
+    # @abstractmethod
+    # def get_element_info(self, name: Union[str, int]) -> Dict:
+    #     """
+    #     Method that returns the information associated to a basis element
+
+    #     Parameters:
+    #         name (str or int): identifier of the basis element or its index
+
+    #     Returns:
+    #         dictionary containing the information
+    #     """
+    #     pass

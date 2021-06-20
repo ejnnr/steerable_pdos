@@ -67,7 +67,7 @@ class PointwiseDropout(EquivariantModule):
         output = F.dropout(input.tensor, self.p, self.training, self.inplace)
         
         # wrap the result in a GeometricTensor
-        return GeometricTensor(output, self.out_type)
+        return GeometricTensor(output, self.out_type, input.grid)
 
     def evaluate_output_shape(self, input_shape: Tuple[int, int, int, int]) -> Tuple[int, int, int, int]:
         assert len(input_shape) == 4

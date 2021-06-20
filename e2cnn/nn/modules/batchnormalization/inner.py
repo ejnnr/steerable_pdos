@@ -124,7 +124,10 @@ class InnerBatchNorm(EquivariantModule):
         
         assert input.type == self.in_type
         
-        b, c, h, w = input.tensor.shape
+        if input.grid is None:
+            b, c, h, w = input.tensor.shape
+        else:
+            b, c, p = input.tensor.shape
         
         output = torch.empty_like(input.tensor)
         
@@ -136,17 +139,27 @@ class InnerBatchNorm(EquivariantModule):
             
             if contiguous:
                 # if the fields were contiguous, we can use slicing
-                output[:, indices[0]:indices[1], :, :] = batchnorm(
-                    input.tensor[:, indices[0]:indices[1], :, :].view(b, -1, s, h, w)
-                ).view(b, -1, h, w)
+                if input.grid is None:
+                    output[:, indices[0]:indices[1], :, :] = batchnorm(
+                        input.tensor[:, indices[0]:indices[1], :, :].view(b, -1, s, h, w)
+                    ).view(b, -1, h, w)
+                else:
+                    output[:, indices[0]:indices[1], :] = batchnorm(
+                        input.tensor[:, indices[0]:indices[1], :].view(b, -1, s, p, 1)
+                    ).view(b, -1, p)
             else:
                 # otherwise we have to use indexing
-                output[:, indices, :, :] = batchnorm(
-                    input.tensor[:, indices, :, :].view(b, -1, s, h, w)
-                ).view(b, -1, h, w)
+                if input.grid is None:
+                    output[:, indices, :, :] = batchnorm(
+                        input.tensor[:, indices, :, :].view(b, -1, s, h, w)
+                    ).view(b, -1, h, w)
+                else:
+                    output[:, indices, :] = batchnorm(
+                        input.tensor[:, indices, :].view(b, -1, s, p, 1)
+                    ).view(b, -1, p)
         
         # wrap the result in a GeometricTensor
-        return GeometricTensor(output, self.out_type)
+        return GeometricTensor(output, self.out_type, input.grid)
 
     def evaluate_output_shape(self, input_shape: Tuple[int, int, int, int]) -> Tuple[int, int, int, int]:
         assert len(input_shape) == 4

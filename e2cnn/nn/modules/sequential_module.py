@@ -1,8 +1,10 @@
 
 from e2cnn.nn import GeometricTensor
+from e2cnn.group import SO2, CyclicGroup
 from .equivariant_module import EquivariantModule
 
 import torch
+import numpy as np
 
 from typing import List, Tuple, Union, Any
 
@@ -134,3 +136,78 @@ class SequentialModule(EquivariantModule):
             )
 
         return torch.nn.Sequential(OrderedDict(submodules))
+    
+    def activation_variances(self, x):
+        """Similar to forward() but also returns the variance in all layers."""
+        assert x.type == self.in_type
+        variances = []
+        for m in self._modules.values():
+            variances.append(x.tensor.std().item())
+            x = m(x)
+        variances.append(x.tensor.std().item())
+
+        assert x.type == self.out_type
+        
+        return x, np.array(variances)
+
+    def equivariance_errors(self, elements: List = None, quarter_rotations: bool = True, plot: bool = True, figsize=(8, 6)):
+        if plot:
+            import matplotlib.pyplot as plt
+            fig, ax1 = plt.subplots(figsize=figsize)
+            modules = self._modules.values()
+            xs = np.arange(len(modules))
+            names = [m.__class__.__name__ for m in modules]
+            ax1.set_xticks(xs)
+            ax1.set_xticklabels(names)
+            ax2 = ax1.twinx()
+            ax1.set_ylabel("Absolute error")
+            ax2.set_ylabel("Relative error")
+        P = 29
+        B = 1
+        if elements is None:
+            if quarter_rotations:
+                if isinstance(self.in_type.gspace.fibergroup, SO2):
+                    elements = [0., np.pi/2, np.pi, 3*np.pi/2]
+                elif isinstance(self.in_type.gspace.fibergroup, CyclicGroup):
+                    N = self.in_type.gspace.fibergroup.order()
+                    elements = [0, N // 4, N // 2, 3 * (N // 4)]
+                else:
+                    raise NotImplementedError
+            else:
+                elements = list(self.in_type.gspace.fibergroup.testing_elements())
+
+        with torch.no_grad():
+            x = GeometricTensor(torch.rand(B, self.in_type.size, P, P), self.in_type)
+            all_errors = np.empty((len(elements), len(self._modules)))
+            all_relative_errors = np.empty((len(elements), len(self._modules)))
+            for k, el in enumerate(elements):
+                # We do two runs through the network in parallel:
+                # once for the original input, and once for the transformed
+                # input. After each layer, we compare the one on the transformed
+                # input to the transformed version of the output for the original
+                # input.
+                out = x
+                out_transformed = x.transform(el)
+                errors = []
+                relative_errors = []
+                for m in self._modules.values():
+                    out = m(out)
+                    out_transformed = m(out_transformed)
+                    out1 = out.transform(el).tensor.detach().numpy()
+                    out2 = out_transformed.tensor.detach().numpy()
+                    errors.append(np.max(np.abs(out1 - out2)))
+                    # calculate the maximum relative error
+                    relative_errors.append(
+                        np.max(np.abs(out1 - out2)) / np.sqrt(np.sum(out1**2 + out2**2) / (out1.size + out2.size))
+                    )
+
+                all_errors[k] = errors
+                all_relative_errors[k] = relative_errors
+                if plot:
+                    ax1.plot(errors, label=f"{el} (absolute)")
+                    ax2.plot(relative_errors, label=f"{el} (relative)", linestyle="dotted")
+        if plot:
+            ax1.legend(loc=2)
+            ax2.legend(loc=1)
+
+        return all_errors

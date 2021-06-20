@@ -1,7 +1,8 @@
+import warnings
 
 from e2cnn.kernels import KernelBasis, EmptyBasisException
 from e2cnn.diffops import DiffopBasis
-from .basisexpansion import BasisExpansion
+from .basisexpansion import DenseBasisExpansion
 
 from typing import Callable, Dict, List, Iterable, Union
 
@@ -10,18 +11,24 @@ import numpy as np
 
 __all__ = ["SingleBlockBasisExpansion", "block_basisexpansion"]
 
+warnings.filterwarnings("ignore", message="indexing with dtype torch.uint8 is now deprecated")
 
-class SingleBlockBasisExpansion(BasisExpansion):
+
+class SingleBlockBasisExpansion(DenseBasisExpansion):
     
     def __init__(self,
                  basis: KernelBasis,
                  points: np.ndarray,
                  basis_filter: Callable[[dict], bool] = None,
-                 **kwargs
+                 smoothing: float = None,
+                 accuracy: int = None,
+                 rotate90: bool = False,
+                 normalize: bool = True,
+                 angle_offset: float = None,
                  ):
         r"""
         
-        Basis expansion method for a single contiguous block, i.e. for kernels/PDOs whose input type and output type contain
+        Basis expansion method for a single contiguous block, i.e. for kernels whose input type and output type contain
         only fields of one type.
         
         Args:
@@ -29,7 +36,6 @@ class SingleBlockBasisExpansion(BasisExpansion):
             points (ndarray): points where the analytical basis should be sampled
             basis_filter (callable, optional): filter for the basis elements. Should take a dictionary containing an
                                                element's attributes and return whether to keep it or not.
-            **kwargs: additional optional arguments for the discretization procedure
             
         """
 
@@ -55,11 +61,8 @@ class SingleBlockBasisExpansion(BasisExpansion):
         # For diffops, masking happens inside the sampling functions to improve
         # performance, but this is currently not implemented for kernels.
         if isinstance(basis, DiffopBasis):
-            angle_offset = kwargs.get("angle_offset", None)
-            smoothing = kwargs.get("smoothing", None)
-            rbf = kwargs["radial_basis_function"]
             sampled_basis = torch.Tensor(basis.sample(
-                points, mask=mask, smoothing=smoothing, angle_offset=angle_offset, radial_basis_function=rbf
+                points, mask=mask, smoothing=smoothing, accuracy=accuracy, angle_offset=angle_offset
             )).permute(2, 0, 1, 3)
         else:
             sampled_basis = torch.Tensor(basis.sample(points)).permute(2, 0, 1, 3)
@@ -73,9 +76,19 @@ class SingleBlockBasisExpansion(BasisExpansion):
             # filter out the basis elements discarded by the filter
             sampled_basis = sampled_basis[mask, ...]
         
-        # normalize the basis
-        sizes = torch.tensor(sizes, dtype=sampled_basis.dtype)
-        sampled_basis = normalize_basis(sampled_basis, sizes)
+        if rotate90:
+            b, c_out, c_in, num_points = sampled_basis.shape
+            size = int(np.sqrt(num_points))
+            sampled_basis = sampled_basis.view(b, c_out, c_in, size, size)
+            sampled_basis = sampled_basis.rot90(1, (3, 4))
+            # we need to reshape rather than just take a view,
+            # since the rotation made the array non-contiguous
+            sampled_basis = sampled_basis.reshape(b, c_out, c_in, num_points)
+        
+        if normalize:
+            # normalize the basis
+            sizes = torch.tensor(sizes, dtype=sampled_basis.dtype)
+            sampled_basis = normalize_basis(sampled_basis, sizes)
 
         # discard the basis which are close to zero everywhere
         norms = (sampled_basis ** 2).reshape(sampled_basis.shape[0], -1).sum(1) > 1e-2
@@ -97,15 +110,25 @@ class SingleBlockBasisExpansion(BasisExpansion):
                 radial_info = attr["order"]
             else:
                 raise ValueError("No radial information found.")
-            id = '({}-{},{}-{})_({}/{})_{}'.format(
-                    attr["in_irrep"], attr["in_irrep_idx"],  # name and index within the field of the input irrep
-                    attr["out_irrep"], attr["out_irrep_idx"],  # name and index within the field of the output irrep
-                    radial_info,
-                    attr["frequency"],  # frequency of the basis element
-                    # int(np.abs(attr["frequency"])),  # absolute frequency of the basis element
-                    attr["inner_idx"],
-                    # index of the basis element within the basis of radially independent kernels between the irreps
-                )
+
+            if "in_irrep" in attr:
+                id = '({}-{},{}-{})_({}/{})_{}'.format(
+                        attr["in_irrep"], attr["in_irrep_idx"],  # name and index within the field of the input irrep
+                        attr["out_irrep"], attr["out_irrep_idx"],  # name and index within the field of the output irrep
+                        radial_info,
+                        attr["frequency"],  # frequency of the basis element
+                        # int(np.abs(attr["frequency"])),  # absolute frequency of the basis element
+                        attr["inner_idx"],
+                        # index of the basis element within the basis of radially independent kernels between the irreps
+                    )
+            else:
+                id = 'special_regular_({}/{})_{}'.format(
+                        radial_info,
+                        attr["frequency"],  # frequency of the basis element
+                        # int(np.abs(attr["frequency"])),  # absolute frequency of the basis element
+                        attr["inner_idx"],
+                        # index of the basis element within the basis of radially independent kernels between the irreps
+                    )
             attr["id"] = id
             self._ids_to_idx[id] = idx
             self._idx_to_ids.append(id)
@@ -117,13 +140,13 @@ class SingleBlockBasisExpansion(BasisExpansion):
         # expand the current subset of basis vectors and set the result in the appropriate place in the filter
         return torch.einsum('boi...,kb->koi...', self.sampled_basis, weights) #.transpose(1, 2).contiguous()
 
-    def get_basis_names(self) -> List[str]:
-        return self._idx_to_ids
+    # def get_basis_names(self) -> List[str]:
+    #     return self._idx_to_ids
 
-    def get_element_info(self, name: Union[str, int]) -> Dict:
-        if isinstance(name, str):
-            name = self._ids_to_idx[name]
-        return self.attributes[name]
+    # def get_element_info(self, name: Union[str, int]) -> Dict:
+    #     if isinstance(name, str):
+    #         name = self._ids_to_idx[name]
+    #     return self.attributes[name]
 
     def get_basis_info(self) -> Iterable:
         return iter(self.attributes)
@@ -142,7 +165,11 @@ def block_basisexpansion(basis: KernelBasis,
                          points: np.ndarray,
                          basis_filter: Callable[[dict], bool] = None,
                          recompute: bool = False,
-                         **kwargs
+                         smoothing: float = None,
+                         accuracy: int = None,
+                         rotate90: bool = False,
+                         normalize: bool = True,
+                         angle_offset: float = None,
                          ) -> SingleBlockBasisExpansion:
     r"""
 
@@ -161,22 +188,34 @@ def block_basisexpansion(basis: KernelBasis,
         for b, attr in enumerate(basis):
             mask[b] = basis_filter(attr)
         
-        angle_offset = kwargs.get("angle_offset", None)
-        smoothing = kwargs.get("smoothing", None)
         if isinstance(points, list):
             points_key = tuple(points)
         elif isinstance(points, tuple):
             points_key = (tuple(points[0]), tuple(points[1]))
         else:
             points_key = points.tobytes()
-        key = (basis, mask.tobytes(), points_key, angle_offset, smoothing)
+        key = (basis, mask.tobytes(), points_key, smoothing, accuracy, rotate90, normalize, angle_offset)
         if key not in _stored_filters:
-            _stored_filters[key] = SingleBlockBasisExpansion(basis, points, basis_filter, **kwargs)
+            _stored_filters[key] = SingleBlockBasisExpansion(
+                basis, points, basis_filter,
+                smoothing=smoothing,
+                accuracy=accuracy,
+                rotate90=rotate90,
+                normalize=normalize,
+                angle_offset=angle_offset,
+            )
         
         return _stored_filters[key]
     
     else:
-        return SingleBlockBasisExpansion(basis, points, basis_filter, **kwargs)
+        return SingleBlockBasisExpansion(
+            basis, points, basis_filter,
+            smoothing=smoothing,
+            accuracy=accuracy,
+            rotate90=rotate90,
+            normalize=normalize,
+            angle_offset=angle_offset,
+        )
 
 
 def normalize_basis(basis: torch.Tensor, sizes: torch.Tensor) -> torch.Tensor:

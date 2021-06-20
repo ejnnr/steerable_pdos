@@ -7,16 +7,19 @@ from e2cnn.kernels.irreps_basis import IrrepBasis
 from e2cnn.group import Representation, SO2, CyclicGroup
 
 from .basis import DiffopBasis
+from .utils import max_partial_orders, transform_polynomial
 
 from typing import Type, List
 
 
-class SteerableDiffopBasis(DiffopBasis):
+class SteerableKernelBasis(DiffopBasis):
 
     def __init__(self,
                  irreps_basis: Type[DiffopBasis],
                  in_repr: Representation,
                  out_repr: Representation,
+                 special_regular_basis: bool = False,
+                 maximum_partial_order: int = None,
                  **kwargs):
         r"""
         
@@ -72,6 +75,32 @@ class SteerableDiffopBasis(DiffopBasis):
         self.out_repr = out_repr
         group = in_repr.group
         self.group = group
+        self.special_regular_basis = False
+
+        # To implement the way that PDO-eConvs filter the basis, we need
+        # a specific basis because the PDO-eConvs filter is not invariant
+        # under a change of basis
+        if (special_regular_basis
+            and {in_repr.name, out_repr.name} in ({"regular"}, {"regular", "irrep_0"})):
+            
+            self.special_regular_basis = True
+            # for now, this is only implemented in a very specific setting
+            # that we need to implement PDO-eConvs. Should be easy to generalize
+            # to D_N and to non-zero maximum offsets though
+            assert isinstance(in_repr.group, CyclicGroup)
+            assert "max_frequency" in kwargs
+            assert "max_offset" in kwargs and kwargs["max_offset"] == 0
+            if {in_repr.name, out_repr.name} == {"regular"}:
+                coefficients = build_regular_basis(in_repr.group.order(), kwargs["max_frequency"], maximum_partial_order)
+            elif in_repr.name == "regular":
+                coefficients = build_regular_to_trivial_basis(in_repr.group.order(), kwargs["max_frequency"], maximum_partial_order)
+            else:
+                coefficients = build_trivial_to_regular_basis(in_repr.group.order(), kwargs["max_frequency"], maximum_partial_order)
+
+            super().__init__(coefficients)
+            return
+
+        assert maximum_partial_order is None, "partial order limit only supported for special regular basis"
 
         A_inv = np.array(in_repr.change_of_basis_inv, copy=True)
         B = np.array(out_repr.change_of_basis, copy=True)
@@ -182,6 +211,15 @@ class SteerableDiffopBasis(DiffopBasis):
     def __getitem__(self, idx):
         assert idx < self.dim
 
+        if self.special_regular_basis:
+            return {
+                "idx": idx,
+                "inner_idx": idx,
+                "shape": self.coefficients[idx].shape[:2],
+                "order": self.coefficients[idx].shape[2] - 1,
+                "frequency": self.coefficients[idx].shape[2] - 1
+            }
+        
         count = 0
         for ii in range(len(self.in_sizes)):
             for oo in range(len(self.out_sizes)):
@@ -209,6 +247,16 @@ class SteerableDiffopBasis(DiffopBasis):
                     count += dim
 
     def __iter__(self):
+        if self.special_regular_basis:
+            for idx in range(len(self.coefficients)):
+                yield {
+                    "idx": idx,
+                    "inner_idx": idx,
+                    "shape": self.coefficients[idx].shape[:2],
+                    "order": self.coefficients[idx].shape[2] - 1,
+                    "frequency": self.coefficients[idx].shape[2] - 1
+                }
+            return
 
         idx = 0
         for ii in range(len(self.in_sizes)):
@@ -233,10 +281,17 @@ class SteerableDiffopBasis(DiffopBasis):
                         idx += 1
 
     def __eq__(self, other):
-        if not isinstance(other, SteerableDiffopBasis):
+        if not isinstance(other, SteerableKernelBasis):
             return False
         elif self.in_repr != other.in_repr or self.out_repr != other.out_repr:
             return False
+        elif self.special_regular_basis:
+            if not other.special_regular_basis:
+                return False
+            # checking whether the bases are equally large, which works
+            # because the only variable is the maximum frequency, which determines
+            # the basis size
+            return len(self.coefficients) == len(other.coefficients)
         else:
             sbk1 = sorted(self.irreps_bases.keys())
             sbk2 = sorted(other.irreps_bases.keys())
@@ -250,9 +305,96 @@ class SteerableDiffopBasis(DiffopBasis):
             return True
 
     def __hash__(self):
-        key = (self.in_repr, self.out_repr)
+        key = (self.in_repr, self.out_repr, self.special_regular_basis)
+        if self.special_regular_basis:
+            return hash((key, len(self.coefficients)))
 
         h = hash(key)
         for basis in self.irreps_bases.items():
             h += hash(basis)
         return h
+        
+        
+def build_regular_basis(N: int, maximum_order: int, maximum_partial_order: int = None):
+    """Compute the coefficient list for a C_N -> C_N regular basis."""
+    so2 = SO2(maximum_order)
+    basis = []
+    # iterate over all N freely choosable positions
+    for pos in range(N):
+        # then iterate over all PDO orders
+        for order in range(maximum_order + 1):
+            # and for each order over all monomials with that order,
+            # x^order, ..., y^order
+            for i in range(order + 1):
+                element = np.zeros((N, N, order + 1))
+                poly = np.zeros(order + 1)
+                poly[i] = 1
+
+                if maximum_partial_order is not None and any(order > maximum_partial_order for order in max_partial_orders(poly)):
+                    continue
+
+                # fill in the rows of the current basis element,
+                # they are rotated and shifted versions of the first one
+                for j in range(N):
+                    # the rotation matrix for the j-th element of C_N:
+                    matrix = so2.irrep(1)(2 * np.pi / N * j)
+                    # we transform the polynomial with the matrix
+                    transformed_poly = transform_polynomial(poly, matrix)
+                    # then we set the right element of the matrix to that polynomial.
+                    # we are in row j, and in the first row, we want the polynomial
+                    # at position pos. All other rows are shifted cyclically.
+                    element[j, (pos + j) % N] = transformed_poly
+                basis.append(element)
+    return basis
+
+def build_trivial_to_regular_basis(N: int, maximum_order: int, maximum_partial_order: int = None):
+    so2 = SO2(maximum_order)
+    basis = []
+    # iterate over all PDO orders
+    for order in range(maximum_order + 1):
+        # and for each order over all monomials with that order,
+        # x^order, ..., y^order
+        for i in range(order + 1):
+            element = np.zeros((N, 1, order + 1))
+            poly = np.zeros(order + 1)
+            poly[i] = 1
+
+            if maximum_partial_order is not None and any(order > maximum_partial_order for order in max_partial_orders(poly)):
+                continue
+
+            # fill in the rows of the current basis element,
+            # they are rotated and shifted versions of the first one
+            for j in range(N):
+                # the rotation matrix for the j-th element of C_N:
+                matrix = so2.irrep(1)(2 * np.pi / N * j)
+                # we transform the polynomial with the matrix
+                transformed_poly = transform_polynomial(poly, matrix)
+                element[j, 0] = transformed_poly
+            basis.append(element)
+    return basis
+
+def build_regular_to_trivial_basis(N: int, maximum_order: int, maximum_partial_order: int = None):
+    so2 = SO2(maximum_order)
+    basis = []
+    # iterate over all PDO orders
+    for order in range(maximum_order + 1):
+        # and for each order over all monomials with that order,
+        # x^order, ..., y^order
+        for i in range(order + 1):
+            element = np.zeros((1, N, order + 1))
+            poly = np.zeros(order + 1)
+            poly[i] = 1
+
+            if maximum_partial_order is not None and any(order > maximum_partial_order for order in max_partial_orders(poly)):
+                continue
+
+            # fill in the columns of the current basis element,
+            # they are rotated and shifted versions of the first one
+            for j in range(N):
+                # the rotation matrix for the j-th element of C_N:
+                matrix = so2.irrep(1)(2 * np.pi / N * j)
+                # we transform the polynomial with the matrix
+                transformed_poly = transform_polynomial(poly, matrix)
+                element[0, j] = transformed_poly
+            basis.append(element)
+    return basis

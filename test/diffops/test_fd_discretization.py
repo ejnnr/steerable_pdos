@@ -86,8 +86,3 @@ def test_exact_on_polynomials():
             assert np.allclose(discrete_result, exact_result), (f"n: {n}, degree: {degree},\n"
                                                                 f"poly: {poly},\n coefficients: {coefficients}\n"
                                                                 f"kernel: \n{kernel}")
-
-def make_grid(n):
-    x = np.arange(-n, n + 1)
-    # we want x to be the first axis, that's why we need the ::-1
-    return np.stack(np.meshgrid(x, x)[::-1]).reshape(2, -1)

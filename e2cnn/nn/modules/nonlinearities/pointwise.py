@@ -77,7 +77,7 @@ class PointwiseNonLinearity(EquivariantModule):
         
         # TODO - remove the 'contiguous()' call as soon as PyTorch's error is fixed
         # return GeometricTensor(self._function(input.tensor.contiguous()), self.out_type)
-        return GeometricTensor(self._function(input.tensor), self.out_type)
+        return GeometricTensor(self._function(input.tensor), self.out_type, input.grid)
 
     def evaluate_output_shape(self, input_shape: Tuple[int, int, int, int]) -> Tuple[int, int, int, int]:
         assert len(input_shape) == 4

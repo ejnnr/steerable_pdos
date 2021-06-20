@@ -4,21 +4,31 @@ Steerable PDO support for the E2CNN library
 This is a fork of the [*e2cnn* library](https://github.com/QUVA-Lab/e2cnn) that adds support
 for Steerable PDOs, i.e. equivariant partial differential operators.
 
-The main changes are a new `diffops` module that plays the analogous role to `kernels`
-but for PDOs, a `gspace.build_diffop_basis()` method (analogous to `gspace.build_kernel_basis()`)
-and the equivariant `nn.R2Diffop` module (a drop-in replacement for `nn.R2Conv`).
+This branch (`experiments`) contains the original code for [our experiments](https://github.com/ejnnr/steerable_pdo_experiments).
+Unless you want to reproduce these experiments, we strongly recommend you use
+the [main branch](https://github.com/ejnnr/steerable_pdos) instead.
 
-If you have questions specifically about Steerable PDOs and this implementation,
-please [contact me](mailto:erik.jenner99@gmail.com).
+The differences to the main branch are:
+- Slight differences in the library interface (the main branch tries harder to be
+  backward compatible to e2cnn)
+- This branch supports the basis used by [PDO-eConvs](https://arxiv.org/abs/2007.10408).
+  If you are interested in using the PDO-eConv basis for your own work, feel free to
+  file an issue or [contact me](mailto:erik.jenner99@gmail.com) (this part of the implementation
+  was only ever designed for our experiments and is not as user-friendly as the remaining library).
+- This branch has **experimental** support for convolutions and differential operators
+  on point clouds (via `nn.R2GeneralConv` and `nn.R2GeneralDiffop`). Again, feel free to contact
+  me if you are interested in using that; the implementation is relatively complete but
+  rather slow and memory-intensive, and not as well documented.
+- This branch is missing some features that we didn't need for the experiments but implemented
+  for completeness sake in the main branch (e.g. support for O(2)).
+- The main branch has complete and accurate documentation, whereas parts of this branch are
+  essentially undocumented.
 
 ## Installation
-The original *e2cnn* library can be installed with `pip install e2cnn`.
-If you want to install the main branch of this fork, use
-```
-pip install git+https://github.com/ejnnr/steerable_pdos
-```
-Note that if you want to use Gaussian or RBF-FD discretization, you will need the
-[RBF library](https://github.com/treverhines/RBF) as an additional optional dependency.
+If you want to set up this library for our experiments, see the instructions in
+[our experiments repo](https://github.com/ejnnr/steerable_pdo_experiments).
+If you want to use it in your own code, you are probably in the wrong branch,
+see the [main branch](https://github.com/ejnnr/steerable_pdos).
 
 ## Cite
 

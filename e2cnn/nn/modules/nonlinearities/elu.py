@@ -64,7 +64,7 @@ class ELU(EquivariantModule):
         """
         
         assert input.type == self.in_type
-        return GeometricTensor(F.elu(input.tensor, alpha=self.alpha, inplace=self._inplace), self.out_type)
+        return GeometricTensor(F.elu(input.tensor, alpha=self.alpha, inplace=self._inplace), self.out_type, input.grid)
 
     def evaluate_output_shape(self, input_shape: Tuple[int, int, int, int]) -> Tuple[int, int, int, int]:
         assert len(input_shape) == 4

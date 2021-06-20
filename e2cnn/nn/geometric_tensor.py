@@ -4,6 +4,7 @@ import torch
 from torch import Tensor
 
 from .field_type import FieldType
+from .grid import Grid
 
 from typing import List, Union
 
@@ -16,7 +17,7 @@ __all__ = ["GeometricTensor", "tensor_directsum"]
 
 class GeometricTensor:
     
-    def __init__(self, tensor: Tensor, type: FieldType):
+    def __init__(self, tensor: Tensor, type: FieldType, grid: Grid = None):
         r"""
         
         A GeometricTensor can be interpreted as a *typed* tensor.
@@ -169,6 +170,12 @@ class GeometricTensor:
         
         # FieldType: field type of the signal
         self.type = type
+
+        if grid is not None:
+            assert isinstance(grid, Grid)
+            assert len(tensor.shape) == 3
+            assert tensor.shape[2] == len(grid)
+        self.grid = grid
     
     def restrict(self, id) -> 'GeometricTensor':
         r"""
@@ -204,7 +211,7 @@ class GeometricTensor:
             
         """
         new_class = self.type.restrict(id)
-        return GeometricTensor(self.tensor, new_class)
+        return GeometricTensor(self.tensor, new_class, self.grid)
     
     def split(self, breaks: List[int]):
         r"""
@@ -296,12 +303,12 @@ class GeometricTensor:
             assert b > last_field, 'Error! "breaks" must be an increasing list of positive indexes'
             
             # compute the sub-class of the new sub-tensor
-            repr = FieldType(self.type.gspace, self.type.representations[last_field:b])
+            type = FieldType(self.type.gspace, self.type.representations[last_field:b])
             
             # retrieve the sub-tensor
             data = self.tensor[:, positions[last_field]:positions[b], ...]
             
-            tensors.append(GeometricTensor(data, repr))
+            tensors.append(GeometricTensor(data, type, self.grid))
             
             last_field = b
         
@@ -326,6 +333,8 @@ class GeometricTensor:
             the transformed tensor
 
         """
+        if self.grid is not None:
+            raise NotImplementedError("Transforming tensors on general grids is not yet supported.")
     
         transformed = self.type.transform(self.tensor, element)
         return GeometricTensor(transformed, self.type)
@@ -515,6 +524,7 @@ class GeometricTensor:
                 fields = range(len(self.type))[expanded_idxs[1]]
                 representations = self.type.representations[expanded_idxs[1]]
             elif isinstance(expanded_idxs[1], int):
+                # TODO: this should never be reached, right?
                 fields = [expanded_idxs[1]]
                 representations = self.type.representations[expanded_idxs[1]]
             elif isinstance(expanded_idxs[1], Iterable):
@@ -540,11 +550,21 @@ class GeometricTensor:
             # concatenate all the channel indexes
             channel_idxs = list(itertools.chain(*idxs))
             expanded_idxs[1] = channel_idxs
+        
+        if len(expanded_idxs) <= 2 or self.grid is None:
+            # spatial dimensions are not indexed
+            # or we're not using a grid
+            grid = self.grid
+        else:
+            # since the spatial dimension is indexed and we're
+            # using a grid, we need to also slice the grid itself
+            spatial_slice = expanded_idxs[2]
+            grid = Grid(self.grid.coordinates[:, spatial_slice], copy=False)
 
         idxs = tuple(expanded_idxs)
         
         sliced_tensor = self.tensor[idxs]
-        return GeometricTensor(sliced_tensor, type)
+        return GeometricTensor(sliced_tensor, type, grid=grid)
 
     def __add__(self, other: 'GeometricTensor') -> 'GeometricTensor':
         r"""
@@ -558,8 +578,9 @@ class GeometricTensor:
             the sum
 
         """
-        assert self.type == other.type, 'The two geometric tensor must have the same FieldType'
-        return GeometricTensor(self.tensor + other.tensor, self.type)
+        assert self.type == other.type, 'The two geometric tensors must have the same FieldType'
+        assert self.grid == other.grid, 'The two geometric tensors must have the same Grid'
+        return GeometricTensor(self.tensor + other.tensor, self.type, self.grid)
 
     def __sub__(self, other: 'GeometricTensor') -> 'GeometricTensor':
         r"""
@@ -573,7 +594,8 @@ class GeometricTensor:
             their difference
 
         """
-        assert self.type == other.type, 'The two geometric tensor must have the same FieldType'
+        assert self.type == other.type, 'The two geometric tensors must have the same FieldType'
+        assert self.grid == other.grid, 'The two geometric tensors must have the same Grid'
         return GeometricTensor(self.tensor - other.tensor, self.type)
 
     def __iadd__(self, other: 'GeometricTensor') -> 'GeometricTensor':
@@ -588,7 +610,8 @@ class GeometricTensor:
             this tensor
 
         """
-        assert self.type == other.type, 'The two geometric tensor must have the same FieldType'
+        assert self.type == other.type, 'The two geometric tensors must have the same FieldType'
+        assert self.grid == other.grid, 'The two geometric tensors must have the same Grid'
         self.tensor += other.tensor
         return self
 
@@ -604,7 +627,8 @@ class GeometricTensor:
             this tensor
 
         """
-        assert self.type == other.type, 'The two geometric tensor must have the same FieldType'
+        assert self.type == other.type, 'The two geometric tensors must have the same FieldType'
+        assert self.grid == other.grid, 'The two geometric tensors must have the same Grid'
 
         self.tensor -= other.tensor
         return self
@@ -626,7 +650,7 @@ class GeometricTensor:
         """
         assert isinstance(other, float) or other.numel() == 1, 'Only multiplication with a scalar is allowed'
 
-        return GeometricTensor(self.tensor * other, self.type)
+        return GeometricTensor(self.tensor * other, self.type, self.grid)
 
     __rmul__ = __mul__
 
@@ -652,7 +676,11 @@ class GeometricTensor:
     def __repr__(self):
         t = repr(self.tensor)[:-1]
         t = t.replace('\n', '\n  ')
-        r = 'g_' + t + ', ' + repr(self.type) + ')'
+        if self.grid is not None:
+            grid_repr = repr(self.grid)
+        else:
+            grid_repr = ''
+        r = 'g_' + t + ', ' + repr(self.type) + grid_repr + ')'
 
         return r
 
@@ -683,6 +711,7 @@ def tensor_directsum(tensors: List['GeometricTensor']) -> 'GeometricTensor':
         assert tensors[0].tensor.ndimension() == tensors[i].tensor.ndimension()
         assert tensors[0].tensor.shape[0] == tensors[i].tensor.shape[0]
         assert tensors[0].tensor.shape[2:] == tensors[i].tensor.shape[2:]
+        assert tensors[0].grid == tensors[i].grid
     
     # concatenate all representations from all field types
     reprs = []

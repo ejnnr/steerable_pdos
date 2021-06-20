@@ -2,6 +2,8 @@ torch>=1.1
 numpy
 scipy
 sympy
+sparse
+torch-sparse
 pymanopt
 autograd
 

@@ -52,7 +52,7 @@ class RestrictionModule(EquivariantModule):
 
     def forward(self, input: GeometricTensor) -> GeometricTensor:
         assert input.type == self.in_type
-        return GeometricTensor(input.tensor, self.out_type)
+        return GeometricTensor(input.tensor, self.out_type, input.grid)
     
     def evaluate_output_shape(self, input_shape: Tuple[int, ...]) -> Tuple[int, ...]:
         return input_shape

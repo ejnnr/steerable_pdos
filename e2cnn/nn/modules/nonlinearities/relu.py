@@ -62,7 +62,7 @@ class ReLU(EquivariantModule):
         """
         
         assert input.type == self.in_type, "Error! the type of the input does not match the input type of this module"
-        return GeometricTensor(F.relu(input.tensor, inplace=self._inplace), self.out_type)
+        return GeometricTensor(F.relu(input.tensor, inplace=self._inplace), self.out_type, input.grid)
 
     def evaluate_output_shape(self, input_shape: Tuple[int, int, int, int]) -> Tuple[int, int, int, int]:
         assert len(input_shape) == 4

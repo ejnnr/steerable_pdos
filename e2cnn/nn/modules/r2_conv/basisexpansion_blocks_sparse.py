@@ -1,11 +1,13 @@
 
+from e2cnn.nn.hybrid_tensor import HybridTensor
 from e2cnn.kernels import KernelBasis, EmptyBasisException
 from e2cnn.gspaces import *
-from e2cnn.nn import FieldType
+from e2cnn.nn import FieldType, Grid
 from .. import utils
 
-from .basisexpansion import DenseBasisExpansion
-from .basisexpansion_singleblock import block_basisexpansion
+from .basisexpansion import BasisExpansion
+from .basisexpansion_singleblock_sparse import sparse_block_basisexpansion
+from .utils import sparse_reshape, sparse_permute
 
 from collections import defaultdict
 
@@ -15,45 +17,24 @@ import torch
 import numpy as np
 
 
-__all__ = ["BlocksBasisExpansion"]
+__all__ = ["SparseBlocksBasisExpansion"]
 
 
-class BlocksBasisExpansion(DenseBasisExpansion):
+class SparseBlocksBasisExpansion(BasisExpansion):
     
     def __init__(self,
                  in_type: FieldType,
                  out_type: FieldType,
-                 points: np.ndarray,
+                 in_grid: Grid,
+                 out_grid: Grid,
+                 num_neighbors: int,
                  method: str = "kernel",
                  basis_filter: Callable[[dict], bool] = None,
                  recompute: bool = False,
                  smoothing: float = None,
-                 accuracy: int = None,
-                 rotate90: bool = False,
                  normalize: bool = True,
-                 angle_offset: bool = None,
                  **kwargs
                  ):
-        r"""
-        
-        With this algorithm, the expansion is done on the intertwiners of the fields' representations pairs in input and
-        output.
-        
-        Args:
-            in_type (FieldType): the input field type
-            out_type (FieldType): the output field type
-            points (~numpy.ndarray): points where the analytical basis should be sampled
-            sigma (list): width of each ring where the bases are sampled
-            rings (list): radii of the rings where to sample the bases
-            basis_filter (callable, optional): filter for the basis elements. Should take a dictionary containing an
-                                               element's attributes and return whether to keep it or not.
-            recompute (bool, optional): whether to recompute new bases or reuse, if possible, already built tensors.
-            **kwargs: keyword arguments specific to the groups and basis used
-        
-        Attributes:
-            S (int): number of points where the filters are sampled
-            
-        """
 
         assert in_type.gspace == out_type.gspace
         assert isinstance(in_type.gspace, GeneralOnR2)
@@ -63,15 +44,6 @@ class BlocksBasisExpansion(DenseBasisExpansion):
         self._out_type = out_type
         self._input_size = in_type.size
         self._output_size = out_type.size
-        self.points = points
-        
-        if isinstance(points, list):
-            self.S = len(points) ** 2
-        elif isinstance(points, tuple):
-            self.S = len(points[0]) * len(points[1])
-        else:
-            # int: number of points where the filters are sampled
-            self.S = self.points.shape[1]
 
         space = in_type.gspace
 
@@ -89,15 +61,7 @@ class BlocksBasisExpansion(DenseBasisExpansion):
                                                      method=method,
                                                      **kwargs)
                     
-                    block_expansion = block_basisexpansion(
-                        basis, points, basis_filter,
-                        recompute=recompute,
-                        smoothing=smoothing,
-                        accuracy=accuracy,
-                        rotate90=rotate90,
-                        normalize=normalize,
-                        angle_offset=angle_offset,
-                    )
+                    block_expansion = sparse_block_basisexpansion(basis, in_grid, out_grid, num_neighbors, basis_filter, recompute=recompute, smoothing=smoothing, normalize=normalize)
                     _block_expansion_modules[reprs_names] = block_expansion
 
                     # register the block expansion as a submodule
@@ -185,67 +149,67 @@ class BlocksBasisExpansion(DenseBasisExpansion):
     def get_basis_names(self) -> List[str]:
         return self._basis_to_ids
     
-    # def get_element_info(self, name: Union[str, int]) -> Dict:
-    #     if isinstance(name, str):
-    #         idx = self._ids_to_basis[name]
-    #     else:
-    #         idx = name
+    def get_element_info(self, name: Union[str, int]) -> Dict:
+        if isinstance(name, str):
+            idx = self._ids_to_basis[name]
+        else:
+            idx = name
         
-    #     reprs_names = None
-    #     relative_idx = None
-    #     for pair, idx_range in self._weights_ranges.items():
-    #         if idx_range[0] <= idx < idx_range[1]:
-    #             reprs_names = pair
-    #             relative_idx = idx - idx_range[0]
-    #             break
-    #     assert reprs_names is not None and relative_idx is not None
+        reprs_names = None
+        relative_idx = None
+        for pair, idx_range in self._weights_ranges.items():
+            if idx_range[0] <= idx < idx_range[1]:
+                reprs_names = pair
+                relative_idx = idx - idx_range[0]
+                break
+        assert reprs_names is not None and relative_idx is not None
         
-    #     block_expansion = getattr(self, f"block_expansion_{reprs_names}")
-    #     block_idx = relative_idx // block_expansion.dimension()
-    #     relative_idx = relative_idx % block_expansion.dimension()
+        block_expansion = getattr(self, f"block_expansion_{reprs_names}")
+        block_idx = relative_idx // block_expansion.dimension()
+        relative_idx = relative_idx % block_expansion.dimension()
         
-    #     attr = block_expansion.get_element_info(relative_idx).copy()
+        attr = block_expansion.get_element_info(relative_idx).copy()
         
-    #     block_count = 0
-    #     out_irreps_count = 0
-    #     for o, o_repr in enumerate(self._out_type.representations):
-    #         in_irreps_count = 0
-    #         for i, i_repr in enumerate(self._in_type.representations):
+        block_count = 0
+        out_irreps_count = 0
+        for o, o_repr in enumerate(self._out_type.representations):
+            in_irreps_count = 0
+            for i, i_repr in enumerate(self._in_type.representations):
             
-    #             if reprs_names == (i_repr.name, o_repr.name):
+                if reprs_names == (i_repr.name, o_repr.name):
                     
-    #                 if block_count == block_idx:
+                    if block_count == block_idx:
 
-    #                     # retrieve the attributes of each basis element and build a new list of
-    #                     # attributes adding information specific to the current block
-    #                     attr.update({
-    #                         "in_irreps_position": in_irreps_count + attr["in_irrep_idx"],
-    #                         "out_irreps_position": out_irreps_count + attr["out_irrep_idx"],
-    #                         "in_repr": reprs_names[0],
-    #                         "out_repr": reprs_names[1],
-    #                         "in_field_position": i,
-    #                         "out_field_position": o,
-    #                     })
+                        # retrieve the attributes of each basis element and build a new list of
+                        # attributes adding information specific to the current block
+                        attr.update({
+                            "in_irreps_position": in_irreps_count + attr["in_irrep_idx"],
+                            "out_irreps_position": out_irreps_count + attr["out_irrep_idx"],
+                            "in_repr": reprs_names[0],
+                            "out_repr": reprs_names[1],
+                            "in_field_position": i,
+                            "out_field_position": o,
+                        })
                     
-    #                     # build the ids of the basis vectors
-    #                     # add names and indices of the input and output fields
-    #                     id = '({}-{},{}-{})'.format(i_repr.name, i, o_repr.name, o)
-    #                     # add the original id in the block submodule
-    #                     id += "_" + attr["id"]
+                        # build the ids of the basis vectors
+                        # add names and indices of the input and output fields
+                        id = '({}-{},{}-{})'.format(i_repr.name, i, o_repr.name, o)
+                        # add the original id in the block submodule
+                        id += "_" + attr["id"]
                     
-    #                     # update with the new id
-    #                     attr["id"] = id
+                        # update with the new id
+                        attr["id"] = id
                         
-    #                     attr["idx"] = idx
+                        attr["idx"] = idx
                         
-    #                     return attr
+                        return attr
                         
-    #                 block_count += 1
+                    block_count += 1
                 
-    #             in_irreps_count += len(i_repr.irreps)
-    #         out_irreps_count += len(o_repr.irreps)
+                in_irreps_count += len(i_repr.irreps)
+            out_irreps_count += len(o_repr.irreps)
         
-    #     raise ValueError(f"Parameter with index {idx} not found!")
+        raise ValueError(f"Parameter with index {idx} not found!")
 
     def get_basis_info(self) -> Iterable:
         
@@ -311,7 +275,7 @@ class BlocksBasisExpansion(DenseBasisExpansion):
     def dimension(self) -> int:
         return len(self._ids_to_basis)
 
-    def _expand_block(self, weights, io_pair):
+    def _expand_block(self, weights, io_pair) -> HybridTensor:
         # retrieve the basis
         block_expansion = getattr(self, f"block_expansion_{io_pair}")
 
@@ -323,19 +287,19 @@ class BlocksBasisExpansion(DenseBasisExpansion):
         
         # expand the current subset of basis vectors and set the result in the appropriate place in the filter
         _filter = block_expansion(coefficients)
-        k, o, i, p = _filter.shape
+        _, c_out, c_in, n_out, n_in = _filter.shape
         
         _filter = _filter.view(
             self._out_count[io_pair[1]],
             self._in_count[io_pair[0]],
-            o,
-            i,
-            self.S,
+            c_out,
+            c_in,
         )
-        _filter = _filter.transpose(1, 2)
+        # consolidate the out and in channel axes
+        _filter = _filter.permute(0, 2, 1, 3)
         return _filter
     
-    def forward(self, weights: torch.Tensor) -> torch.Tensor:
+    def forward(self, weights: torch.Tensor) -> HybridTensor:
         """
         Forward step of the Module which expands the basis and returns the filter built
 
@@ -355,35 +319,39 @@ class BlocksBasisExpansion(DenseBasisExpansion):
             io_pair = self._representations_pairs[0]
             in_indices = getattr(self, f"in_indices_{io_pair}")
             out_indices = getattr(self, f"out_indices_{io_pair}")
-            _filter = self._expand_block(weights, io_pair).reshape(out_indices[2], in_indices[2], self.S)
+            _filter = self._expand_block(weights, io_pair)
+            # block_{out/in} enumerate the blocks of the filter
+            # c_{out/in} are the channels within each block
+            block_out, c_out, block_in, c_in, _, _ = _filter.shape
+            _filter = _filter.reshape(block_out * c_out, block_in * c_in)
             
         else:
-        
-            # build the tensor which will contain te filter
-            _filter = torch.zeros(self._output_size, self._input_size, self.S, device=weights.device)
+            raise NotImplementedError("Sparse basisexpansion only implemented for fields with only one type of representation.")
+            # # build the tensor which will contain te filter
+            # _filter = torch.zeros(self._output_size, self._input_size, self.S, device=weights.device)
 
-            # iterate through all input-output field representations pairs
-            for io_pair in self._representations_pairs:
+            # # iterate through all input-output field representations pairs
+            # for io_pair in self._representations_pairs:
                 
-                # retrieve the indices
-                in_indices = getattr(self, f"in_indices_{io_pair}")
-                out_indices = getattr(self, f"out_indices_{io_pair}")
+            #     # retrieve the indices
+            #     in_indices = getattr(self, f"in_indices_{io_pair}")
+            #     out_indices = getattr(self, f"out_indices_{io_pair}")
                 
-                # expand the current subset of basis vectors and set the result in the appropriate place in the filter
-                expanded = self._expand_block(weights, io_pair)
+            #     # expand the current subset of basis vectors and set the result in the appropriate place in the filter
+            #     expanded = self._expand_block(weights, io_pair)
                 
-                if self._contiguous[io_pair]:
-                    _filter[
-                        out_indices[0]:out_indices[1],
-                        in_indices[0]:in_indices[1],
-                        :,
-                    ] = expanded.reshape(out_indices[2], in_indices[2], self.S)
-                else:
-                    _filter[
-                        out_indices,
-                        in_indices,
-                        :,
-                    ] = expanded.reshape(-1, self.S)
+            #     if self._contiguous[io_pair]:
+            #         _filter[
+            #             out_indices[0]:out_indices[1],
+            #             in_indices[0]:in_indices[1],
+            #             :,
+            #         ] = expanded.reshape(out_indices[2], in_indices[2], self.S)
+            #     else:
+            #         _filter[
+            #             out_indices,
+            #             in_indices,
+            #             :,
+            #         ] = expanded.reshape(-1, self.S)
 
         # return the new filter
         return _filter

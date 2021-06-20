@@ -10,14 +10,16 @@ install_requires = [
     'numpy',
     'scipy',
     'sympy',
+    'sparse',
+    'torch-sparse',
+    'cython',
+    'git+https://github.com/treverhines/RBF',
 ]
 
 
 setup_requires = []
 tests_require = ['scikit-learn', 'scikit-image']
-extras_require = {
-    'RBF-FD and Gaussians': ['cython', 'git+https://github.com/treverhines/RBF']
-}
+extras_require = {}
 
 with open("README.md", 'r', encoding='utf-8') as f:
     long_description = f.read()

@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 from e2cnn import gspaces
-from e2cnn import kernels
-from e2cnn import diffops
+from e2cnn import kernels, diffops
 
 from .general_r2 import GeneralOnR2
 from .utils import rotate_array
@@ -166,8 +165,7 @@ class FlipRot2dOnR2(GeneralOnR2):
     def _basis_generator(self,
                          in_repr: Representation,
                          out_repr: Representation,
-                         rings: List[float],
-                         sigma: List[float],
+                         method: str = "kernel",
                          **kwargs,
                          ) -> kernels.KernelBasis:
         r"""
@@ -191,7 +189,6 @@ class FlipRot2dOnR2(GeneralOnR2):
             the basis built
 
         """
-    
         if self.fibergroup.order() > 0:
             maximum_frequency = None
             maximum_offset = None
@@ -207,62 +204,25 @@ class FlipRot2dOnR2(GeneralOnR2):
             assert (maximum_frequency is not None or maximum_offset is not None), \
                 'Error! Either the maximum frequency or the maximum offset for the frequencies must be set'
         
-            return kernels.kernels_DN_act_R2(in_repr, out_repr, rings, sigma,
-                                             axis=self.axis,
-                                             max_frequency=maximum_frequency,
-                                             max_offset=maximum_offset)
+            if method == "kernel":
+                return kernels.kernels_DN_act_R2(in_repr, out_repr, kwargs["rings"], kwargs["sigma"],
+                                                axis=self.axis,
+                                                max_frequency=maximum_frequency,
+                                                max_offset=maximum_offset)
+            elif method == "diffop":
+                return diffops.kernels_DN_act_R2(in_repr, out_repr, kwargs["max_power"],
+                                                axis=self.axis,
+                                                max_frequency=maximum_frequency,
+                                                max_offset=maximum_offset)
+            else:
+                raise ValueError(f"method must be 'kernel' or 'diffop', not {method}")
         else:
-            return kernels.kernels_O2_act_R2(in_repr, out_repr, rings, sigma, axis=self.axis)
-    
-    def _diffop_basis_generator(self,
-                                in_repr: Representation,
-                                out_repr: Representation,
-                                max_power: int,
-                                ** kwargs,
-                                ) -> diffops.DiffopBasis:
-        r"""
-        Method that builds the analytical basis that spans the space of equivariant PDOs which
-        are intertwiners between the representations induced from the representation ``in_repr`` and ``out_repr``.
-
-        If this :class:`~e2cnn.group.GSpace` includes only a discrete number of rotations (``n > 1``), either
-        ``maximum_frequency`` or ``maximum_offset``  must be set in the keywords arguments.
-
-        Args:
-            in_repr: the input representation
-            out_repr: the output representation
-            max_power (int): the maximum power of Laplacians to use
-
-        Keyword Args:
-            maximum_frequency (int): the maximum frequency allowed in the basis vectors
-            maximum_offset (int): the maximum frequencies offset for each basis vector with respect to its base ones
-                                  (sum and difference of the frequencies of the input and the output representations)
-
-        Returns:
-            the basis built
-
-        """
-    
-        if self.fibergroup.order() > 0:
-            maximum_frequency = None
-            maximum_offset = None
-        
-            if 'maximum_frequency' in kwargs and kwargs['maximum_frequency'] is not None:
-                maximum_frequency = kwargs['maximum_frequency']
-                assert isinstance(maximum_frequency, int) and maximum_frequency >= 0
-        
-            if 'maximum_offset' in kwargs and kwargs['maximum_offset'] is not None:
-                maximum_offset = kwargs['maximum_offset']
-                assert isinstance(maximum_offset, int) and maximum_offset >= 0
-        
-            assert (maximum_frequency is not None or maximum_offset is not None), \
-                'Error! Either the maximum frequency or the maximum offset for the frequencies must be set'
-        
-            return diffops.diffops_DN_act_R2(in_repr, out_repr, max_power,
-                                             axis=self.axis,
-                                             max_frequency=maximum_frequency,
-                                             max_offset=maximum_offset)
-        else:
-            return diffops.diffops_O2_act_R2(in_repr, out_repr, max_power, axis=self.axis)
+            if method == "kernel":
+                return kernels.kernels_O2_act_R2(in_repr, out_repr, kwargs["rings"], kwargs["sigma"], axis=self.axis)
+            elif method == "diffop":
+                raise NotImplementedError("Diffops are not yet implemented for O(2) (you can use D_N though)")
+            else:
+                raise ValueError(f"method must be 'kernel' or 'diffop', not {method}")
 
     def _basespace_action(self, input: np.ndarray, element: Tuple[int, Union[float, int]]) -> np.ndarray:
     

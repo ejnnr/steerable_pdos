@@ -6,9 +6,16 @@ from .multiple_module import MultipleModule
 
 from .r2upsampling import R2Upsampling
 
+
+from .r2_conv import R2Layer
+from .r2_conv import R2General
+from .r2_conv import R2Regular
 from .r2_conv import R2Conv
+from .r2_conv import R2GeneralConv
 from .r2_conv import R2ConvTransposed
 from .r2_conv import R2Diffop
+from .r2_conv import R2GeneralDiffop
+
 
 from .nonlinearities import GatedNonLinearity1
 from .nonlinearities import GatedNonLinearity2
@@ -58,9 +65,14 @@ __all__ = [
     "BranchingModule",
     "MergeModule",
     "MultipleModule",
+    "R2Layer",
+    "R2Regular",
+    "R2General",
     "R2Conv",
+    "R2GeneralConv",
     "R2ConvTransposed",
     "R2Diffop",
+    "R2GeneralDiffop",
     "R2Upsampling",
     "GatedNonLinearity1",
     "GatedNonLinearity2",

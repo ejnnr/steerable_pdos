@@ -5,69 +5,138 @@ import warnings
 import pickle
 
 import numpy as np
-import scipy.special
+import sparse
+import scipy.special  # type: ignore
 from sympy.calculus.finite_diff import finite_diff_weights
+from rbf.pde.fd import weight_matrix, weights # type: ignore
+from rbf.basis import set_symbolic_to_numeric_method, set_cache_dir, get_rbf
+from rbf.utils import KDTree
 
-try:
-    from rbf.pde.fd import weight_matrix # type: ignore
-    from rbf.basis import set_symbolic_to_numeric_method, get_rbf # type: ignore
-
-    _RBF_AVAILABLE = True
-
-    set_symbolic_to_numeric_method('lambdify')
-    _gaussian = get_rbf("ga")
-
-except ImportError:
-    _RBF_AVAILABLE = False
+set_symbolic_to_numeric_method('lambdify')
+phi = get_rbf("phs3")
+_gaussian = get_rbf("ga")
 
 _DIFFOP_CACHE = {}
 _1D_KERNEL_CACHE = {}
 
-def load_cache(path: str = "./.e2cnn_cache/diffops.pickle"):
-    """
-    Load cached PDO discretizations from disk.
-    The cache should have been previously created using :func:`~e2cnn.diffops.store_cache`.
-    
-    Args:
-        path (str, optional): the path to the file with discretizations.
-        
-    """
-    if os.path.exists(path):
+def load_cache():
+    if os.path.exists("./.e2cnn_cache/diffops.pickle"):
         print("Loading cached Diffops")
-        with open(path, "rb") as f:
+        with open("./.e2cnn_cache/diffops.pickle", "rb") as f:
             _DIFFOP_CACHE = pickle.load(f)
     else:
         print("Diffop cache not found, skipping")
 
-def store_cache(path: str = "./.e2cnn_cache/diffops.pickle"):
-    """
-    Cache PDO discretizations on disk.
-    The cache can later be loaded using :func:`~e2cnn.diffops.load_cache`.
-    This will speed up network instantiation as long as the architecture does not
-    change too much.
-    
-    Args:
-        path (str, optional): the path to the file with discretizations.
-        
-    """
-    directory = os.path.dirname(path)
-    os.makedirs(directory, exist_ok=True)
-    with open(path, "w+b") as f:
+def store_cache():
+    os.makedirs("./.e2cnn_cache", exist_ok=True)
+    with open("./.e2cnn_cache/diffops.pickle", "w+b") as f:
         pickle.dump(_DIFFOP_CACHE, f)
+
+def rbffd_discretization(
+    coefficients: np.ndarray,
+    out_coords: np.ndarray,
+    stencils: np.ndarray
+) -> np.ndarray:
+    """Compute the RBF-FD weights for a given Diffop and grids.
+
+    Args:
+        coefficients (ndarray): array with the coefficients of x^n, x^{n - 1}y, ..., y^n
+          (in that order)
+        out_coords (ndarray): 2 x M array with output grid (i.e. points at which the
+          derivative is to be found), where M is the number of output points
+        stencils (ndarray): 2 x M x num_neighbors array with stencils for each output
+          point
+    
+    Returns:
+        (M, num_neighbors) ndarray with the RBF-FD weights for each stencil point
+    """
+    if isinstance(coefficients, (list, tuple)):
+        coefficients = np.array(coefficients)
+    assert len(out_coords.shape) == 2
+    assert out_coords.shape[0] == 2
+    assert len(stencils.shape) == 3
+    assert stencils.shape[0] == 2
+    assert stencils.shape[1] == out_coords.shape[1]
+
+    M, num_neighbors = stencils.shape[1:]
+
+    key = (coefficients.tobytes(), out_coords.tobytes(), stencils.tobytes())
+
+    if key in _RBFFD_CACHE:
+        return _RBFFD_CACHE[key]
+
+    n = len(coefficients) - 1
+
+    nonzero = (coefficients != 0)
+    nonzero_indices = [k for k in range(n + 1) if nonzero[k]]
+
+    diffs = [[n - k, k] for k in nonzero_indices]
+    if not diffs:
+        # we have the zero operator
+        return np.zeros((M, num_neighbors))
+
+    # the RBF library expects the spatial dimension at the end
+    stencils = stencils.transpose(1, 2, 0)
+    out_coords = out_coords.T
+
+    out = weights(out_coords, stencils, diffs, coefficients[nonzero], phi=phi)
+
+    if np.any(np.isnan(out)):
+        raise Exception(f"NaNs encountered while discretizing diffop {display_diffop(coefficients)} on {num_neighbors} points.\n"
+                        f"Diffop passed to RBF: {diffs} with coefficients {coefficients[nonzero]}")
+    if np.all(out == 0):
+        warnings.warn(f"Zero filter encountered while discretizing diffop {display_diffop(coefficients)} on {num_neighbors} points. "
+                    "This might indicate that the kernel size is too small for this differential operator.\n"
+                    f"Diffop passed to RBF: {diffs} with coefficients {coefficients[nonzero]}", RuntimeWarning)
+    if np.any(np.abs(out) > 15):
+        warnings.warn(f"Large filter values encountered while discretizing diffop {display_diffop(coefficients)} on {num_neighbors} points. "
+                    "A larger kernel size might help.\n"
+                    f"Max abs filter value: {np.max(np.abs(out))}\n"
+                    f"Mean abs filter value: {np.mean(np.abs(out))}\n"
+                    f"Diffop passed to RBF: {diffs} with coefficients {coefficients[nonzero]}\n"
+                    f"Number of output points: {out_coords.shape[0]}", RuntimeWarning)
+
+    _RBFFD_CACHE[key] = out
+    return out
 
 
 def discretize_homogeneous_polynomial(
         points: Union[np.ndarray, Tuple[List[float], List[float]], List[float]],
         coefficients: np.ndarray,
+        num_neighbors: int = None,
         smoothing: float = None,
-        phi: str = "ga",
-) -> np.ndarray:
-    r"""Discretize a homogeneous partial differential operator.
-    Homogeneous means that all terms have the same derivative order.
+        accuracy: int = None,
+) -> Union[np.ndarray, sparse.COO]:
+    """Discretize a homogeneous differential operator.
 
-    See :meth:`e2cnn.DiffopBasis.sample` for details.
+    Args:
+        points (ndarray, tuple or list): To use RBF-FD, this has to be a
+          2 x N array with N points on which to discretize.
+          To use FD, this can be either a list of floats, which will be used
+          as the 1D coordinates on which to discretize, or a tuple of two such
+          lists, one for the x- and one for the y-axis.
+          You can also use RBF-FD on a regular kernel,
+          in that case you need to pass in the grid coordinates explicitly (see ``make_grid``).
+        coefficients (ndarray): array with the coefficients of x^n, x^{n - 1}y, ..., y^n
+          (in that order)
+        out_coords (ndarray, optional): 2 x M array with output grid (i.e. points at which the
+          derivative is to be found). If None, only the derivative at zero is found.
+          Only supported for RBF-FD, so ``points`` needs to be an array if ``out_coords`` is not None.
+        num_neighbors (int, optional): number of nearest neighbors that will be used to create
+          a stencil. If no output coordinates are specified and this is None (the default),
+          all input points are used for the stencil. If output coordinates are passed, this
+          parameter must be set! Then each row of the output will have ``num_neighbors``
+          non-zero entries.
+          Note that if you set this parameter without specifying ``out_coords``, you will
+          still get a dense array of shape (N, ), only with some entries zeroed out.
+        accuracy (int, optional): if this is given, then the kernel will still have the
+          shape defined by ``points``, but if possible the margins will be zero, so it
+          is effectively a smaller kernel. The size of this smaller kernel is the smallest
+          one with which the desired order of accuracy is reached.
 
-    """
+    Returns:
+        If ``out_coords`` is ``None``, ndarray of length N with weights for the N grid points.
+        Otherwise, sparse matrix of shape (M, N)"""
     if isinstance(points, (list, tuple)):
         if isinstance(points, list):
             num_points = len(points) **2
@@ -83,8 +152,19 @@ def discretize_homogeneous_polynomial(
         num_points = points.shape[1]
 
     targets = np.array([[0, 0]])
+    if num_neighbors is None:
+        # If we use a regular kernel and no number of neighbors is explicitly
+        # specified, we use the entire kernel
+        num_neighbors = num_points
+    elif isinstance(points, (list, tuple)):
+        raise ValueError("Specifying the number of neighbors is not supported for FD discretization. "
+                            "If you really want to use a custom number of neighbors with a regular kernel, "
+                            "pass in the grid coordinates explicitly (see make_grid) to switch to RBF-FD.")
+    else:
+        warnings.warn("You specified a number of neighbors without specifying output coordinates. "
+                        "You will get a dense kernel, some entries will just be zero.")
 
-    key = (points_key, coefficients.tobytes(), smoothing)
+    key = (points_key, coefficients.tobytes(), num_neighbors, smoothing, accuracy)
     if key in _DIFFOP_CACHE:
         return _DIFFOP_CACHE[key]
 
@@ -99,10 +179,8 @@ def discretize_homogeneous_polynomial(
         return np.zeros(num_points)
     
     if smoothing is not None:
-        if not _RBF_AVAILABLE:
-            raise RuntimeError("Using derivatives of Gaussians for discretization "
-                               "requires the RBF package, please install it. "
-                               "See https://github.com/treverhines/RBF for instructions.")
+        if accuracy is not None:
+            raise NotImplementedError("Zero-padded kernels are not yet implemented for derivatives of Gaussians")
         # use derivatives of Gaussians. In this context, we don't distinguish
         # between FD/RBF-FD, we just return the derivative of a Gaussian on
         # the given points
@@ -125,29 +203,27 @@ def discretize_homogeneous_polynomial(
         kernels = np.stack(
             # type checkers get confused by expanding diff, but we know
             # that it has length 2.
-            [discretize_2d_monomial(*diff, points) for diff in diffs] # type: ignore
+            [discretize_2d_monomial(*diff, points, accuracy) for diff in diffs] # type: ignore
         ).reshape(-1, num_points)
 
         out = np.sum(
             coefficients[nonzero][:, None] * kernels, axis=0
         )
     else:
-        if not _RBF_AVAILABLE:
-            raise RuntimeError("Using RBF-FD for discretization "
-                               "requires the RBF package, please install it. "
-                               "See https://github.com/treverhines/RBF for instructions.")
+        if accuracy is not None:
+            raise ValueError("Can't use target accuracy with RBF-FD, set num_neighbors explicitly instead")
         # points is an array, so we use RBF-FD
-        out = weight_matrix(targets, points.T, num_points, diffs, coefficients[nonzero], phi=phi)
+        out = weight_matrix(targets, points.T, num_neighbors, diffs, coefficients[nonzero], phi=phi)
         if np.any(np.isnan(out.data)):
-            raise Exception(f"NaNs encountered while discretizing diffop {display_diffop(coefficients)} on {num_points} points.\n"
+            raise Exception(f"NaNs encountered while discretizing diffop {display_diffop(coefficients)} on {num_neighbors} points.\n"
                             f"Diffop passed to RBF: {diffs} with coefficients {coefficients[nonzero]}")
         if np.all(out.data == 0):
-            warnings.warn(f"Zero filter encountered while discretizing diffop {display_diffop(coefficients)} on {num_points} points. "
+            warnings.warn(f"Zero filter encountered while discretizing diffop {display_diffop(coefficients)} on {num_neighbors} points. "
                         "This might indicate that the kernel size is too small for this differential operator.\n"
                         f"Diffop passed to RBF: {diffs} with coefficients {coefficients[nonzero]}", RuntimeWarning)
         if np.any(np.abs(out.data) > 1e2):
-            warnings.warn(f"Large filter values encountered while discretizing diffop {display_diffop(coefficients)} on {num_points} points. "
-                        "A larger kernel size or different RBF might help.\n"
+            warnings.warn(f"Large filter values encountered while discretizing diffop {display_diffop(coefficients)} on {num_neighbors} points. "
+                        "A larger kernel size might help.\n"
                         f"Max abs filter value: {np.max(np.abs(out))}\n"
                         f"Diffop passed to RBF: {diffs} with coefficients {coefficients[nonzero]}", RuntimeWarning)
 
@@ -156,7 +232,7 @@ def discretize_homogeneous_polynomial(
     return out
 
 
-def discretize_1d_monomial(n: int, points: List[float]) -> np.ndarray:
+def discretize_1d_monomial(n: int, points: List[float], accuracy: int = None) -> np.ndarray:
     """Discretize the differential operator d^n/dx^n as a convolutional kernel."""
     # calculating the finite difference coefficients using sympy is fast,
     # but given that this function is called extremely often when sampling
@@ -164,11 +240,30 @@ def discretize_1d_monomial(n: int, points: List[float]) -> np.ndarray:
     # of differential operators (because that one only caches something
     # if exactly the same operator appears multiple times).
     # So we use an additional cache here, which caches single monomials.
-    key = (n, tuple(points))
+    key = (n, tuple(points), accuracy)
     if key not in _1D_KERNEL_CACHE:
         assert n < len(points), (f"Can't discretize differential operator of order {n} on {len(points)} points, "
                                 f"at least {n + 1} points are needed")
-        _1D_KERNEL_CACHE[key] = fd_weights(n, points)
+        if accuracy is None:
+            _1D_KERNEL_CACHE[key] = fd_weights(n, points)
+        else:
+            num_points = required_points(n, accuracy)
+            # make number of points odd
+            # HACK: this is probably not what we want in all scenarios,
+            # just the ones I'm working with at the moment
+            if num_points % 2 == 0:
+                num_points += 1
+            assert num_points <= len(points), (f"Can't achieve desired accuracy order {accuracy} "
+                                               f"for differential operator of order {n}, "
+                                               f"at least {num_points} points are needed")
+            # we want to roughly use the middle portion of the given points,
+            # because points are usually chosen symmetrically around 0
+            full_size = len(points)
+            offset = (full_size - num_points) // 2
+            points = points[offset:offset + num_points]
+            result = np.zeros(full_size)
+            result[offset:offset + num_points] = fd_weights(n, points)
+            _1D_KERNEL_CACHE[key] = result
     return _1D_KERNEL_CACHE[key]
 
 
@@ -182,12 +277,13 @@ def fd_weights(n, points):
 def discretize_2d_monomial(n_x: int,
                            n_y: int,
                            points: Union[Tuple[List[float], List[float]], List[float]],
+                           accuracy: int = None,
                            ) -> np.ndarray:
     """Discretize the differential operator d^{n_x + n_y}/{dx^n_x dy^n_y}."""
     if not isinstance(points, tuple):
         points = (points, points)
-    x_kernel = discretize_1d_monomial(n_x, points[0])
-    y_kernel = discretize_1d_monomial(n_y, points[1])
+    x_kernel = discretize_1d_monomial(n_x, points[0], accuracy)
+    y_kernel = discretize_1d_monomial(n_y, points[1], accuracy)
     return x_kernel[:, None] * y_kernel[None, :]
 
 
@@ -267,6 +363,7 @@ def gaussian_derivative(coefficients: np.ndarray, points: np.ndarray, std: float
     return np.sum(
         coefficients[nonzero][:, None] * kernels, axis=0
     )
+
 
 
 def homogenized_cheby(n: int, kind: str = "t") -> np.ndarray:
@@ -364,6 +461,12 @@ def prettify_exponent(k):
     return f"^{k}"
 
 
+def make_grid(n):
+    x = np.arange(-n, n + 1)
+    # we want x to be the first axis, that's why we need the ::-1
+    return np.stack(np.meshgrid(x, x)[::-1]).reshape(2, -1)
+
+
 def eval_polys(coefficients, points):
     """Evaluate homogeneous polynomials on a set of points.
 
@@ -450,3 +553,45 @@ def last_nonzero(arr, axis, invalid_val=-1):
     mask = arr!=0
     val = arr.shape[axis] - np.flip(mask, axis=axis).argmax(axis=axis) - 1
     return np.where(mask.any(axis=axis), val, invalid_val)
+
+def max_partial_orders(coefficients: np.ndarray):
+    """Compute the maximum partial derivative order of a PDO.
+
+    Args:
+        coefficients (ndarray): coefficients in the homogeneous format.
+            Last axis should contain coefficients. Maximum of the derivative
+            orders will be taken over previous axes.
+    
+    Returns:
+        Tuple (max_x, max_y), where max_{direction} is the maximum power
+        with which d/d{direction} occurs.
+        
+        Careful: these are floats because they may be negative infinity!
+        (for the zero operator)"""
+    order = coefficients.shape[-1] - 1
+    assert order >= 0
+    max_x = order - first_nonzero(coefficients, -1, invalid_val=np.inf).min()
+    max_y = last_nonzero(coefficients, -1, -np.inf).max()
+    return max_x, max_y
+
+def nearest_neighbors(
+    in_coords: np.ndarray,
+    out_coords: np.ndarray,
+    num_neighbors: int,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Create nearest neighbor stencils for a collection of input and output points.
+
+    Args:
+        in_coords: (D, N) array with coordinates of the input points (i.e. points
+            that are available for the stencil)
+        out_coords: (D, M) array of points around which stencils should be centered
+        num_neighbors: number of elements in each stencil
+    
+    Returns:
+        (M, num_neighbors) array of indices into in_coords and
+        a (D, M, num_neighbors) array with the corresponding stencil points.
+    """
+    # indices will be an ndarray of shape n_out x num_neighbors,
+    # where n_out is the number of out points
+    _, indices = KDTree(in_coords.T).query(out_coords.T, num_neighbors)
+    return indices, in_coords[:, indices]

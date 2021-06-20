@@ -1,5 +1,5 @@
 
-from e2cnn.diffops.steerable_basis import SteerableDiffopBasis
+from e2cnn.diffops.steerable_basis import SteerableKernelBasis
 from e2cnn.diffops.irreps_basis import *
 from e2cnn.diffops.basis import DiffopBasis, LaplaceProfile, TensorBasis
 
@@ -8,20 +8,19 @@ from e2cnn.group import *
 from typing import List, Union
 
 __all__ = [
-    "diffops_SO2_act_R2",
-    "diffops_O2_act_R2",
-    "diffops_CN_act_R2",
-    "diffops_DN_act_R2",
-    "diffops_Flip_act_R2",
-    "diffops_Trivial_act_R2",
+    "kernels_SO2_act_R2",
+    # "kernels_O2_act_R2",
+    "kernels_CN_act_R2",
+    "kernels_DN_act_R2",
+    "kernels_Flip_act_R2",
+    # "kernels_Trivial_act_R2",
 ]
 
 
-def diffops_Flip_act_R2(in_repr: Representation, out_repr: Representation,
+def kernels_Flip_act_R2(in_repr: Representation, out_repr: Representation,
                         max_power: int,
                         axis: float = np.pi / 2,
-                        max_frequency: int = None,
-                        max_offset: int = None) -> DiffopBasis:
+                        max_frequency: int = None, max_offset: int = None) -> DiffopBasis:
     r"""
 
     Builds a basis for PDOs equivariant to reflections.
@@ -58,7 +57,7 @@ def diffops_Flip_act_R2(in_repr: Representation, out_repr: Representation,
     group = in_repr.group
     assert isinstance(group, CyclicGroup) and group.order() == 2
 
-    angular_basis = SteerableDiffopBasis(R2FlipsSolution, in_repr, out_repr,
+    angular_basis = SteerableKernelBasis(R2FlipsSolution, in_repr, out_repr,
                                          axis=axis,
                                          max_frequency=max_frequency,
                                          max_offset=max_offset)
@@ -68,9 +67,9 @@ def diffops_Flip_act_R2(in_repr: Representation, out_repr: Representation,
     return TensorBasis(radial_profile, angular_basis)
 
 
-def diffops_SO2_act_R2(in_repr: Representation, out_repr: Representation,
-                       max_power: int
-                       ) -> DiffopBasis:
+def kernels_SO2_act_R2(in_repr: Representation, out_repr: Representation,
+                     max_power: int
+                     ) -> DiffopBasis:
     r"""
 
     Builds a basis for PDOs equivariant to continuous rotations, modeled by the
@@ -94,21 +93,22 @@ def diffops_SO2_act_R2(in_repr: Representation, out_repr: Representation,
 
     assert isinstance(group, SO2)
     
-    angular_basis = SteerableDiffopBasis(R2ContinuousRotationsSolution, in_repr, out_repr)
+    angular_basis = SteerableKernelBasis(R2ContinuousRotationsSolution, in_repr, out_repr)
 
     radial_profile = LaplaceProfile(max_power)
     
     return TensorBasis(radial_profile, angular_basis)
 
 
-def diffops_CN_act_R2(in_repr: Representation, out_repr: Representation,
+def kernels_CN_act_R2(in_repr: Representation, out_repr: Representation,
                     max_power: int,
                     max_frequency: int = None,
                     max_offset: int = None,
-                    ) -> DiffopBasis:
+                    special_regular_basis: bool = False,
+                    maximum_partial_order: int = None) -> DiffopBasis:
     r"""
 
-    Builds a basis for PDOs equivariant to :math:`N` discrete rotations, modeled by
+    Builds a basis for convolutional kernels equivariant to :math:`N` discrete rotations, modeled by
     the group :math:`C_N`.
     ``in_repr`` and ``out_repr`` need to be :class:`~e2cnn.group.Representation` s of :class:`~e2cnn.group.CyclicGroup`.
 
@@ -149,16 +149,18 @@ def diffops_CN_act_R2(in_repr: Representation, out_repr: Representation,
 
     assert isinstance(group, CyclicGroup)
 
-    angular_basis = SteerableDiffopBasis(R2DiscreteRotationsSolution, in_repr, out_repr,
+    angular_basis = SteerableKernelBasis(R2DiscreteRotationsSolution, in_repr, out_repr,
                                          max_frequency=max_frequency,
-                                         max_offset=max_offset)
+                                         max_offset=max_offset,
+                                         special_regular_basis=special_regular_basis,
+                                         maximum_partial_order=maximum_partial_order)
 
     radial_profile = LaplaceProfile(max_power)
 
     return TensorBasis(radial_profile, angular_basis)
 
 
-def diffops_DN_act_R2(in_repr: Representation, out_repr: Representation,
+def kernels_DN_act_R2(in_repr: Representation, out_repr: Representation,
                       max_power: int,
                       axis: float = np.pi/2,
                       max_frequency: int = None, max_offset: int = None) -> DiffopBasis:
@@ -201,99 +203,11 @@ def diffops_DN_act_R2(in_repr: Representation, out_repr: Representation,
 
     assert isinstance(group, DihedralGroup)
     
-    angular_basis = SteerableDiffopBasis(R2FlipsDiscreteRotationsSolution, in_repr, out_repr,
+    angular_basis = SteerableKernelBasis(R2FlipsDiscreteRotationsSolution, in_repr, out_repr,
                                          axis=axis,
                                          max_frequency=max_frequency,
                                          max_offset=max_offset)
 
     radial_profile = LaplaceProfile(max_power)
 
-    return TensorBasis(radial_profile, angular_basis)
-
-
-def diffops_O2_act_R2(in_repr: Representation, out_repr: Representation,
-                      max_power: int,
-                      axis: float = np.pi / 2) -> DiffopBasis:
-    r"""
-
-    Builds a basis for PDOs equivariant to reflections and continuous rotations, modeled by the
-    group :math:`O(2)`.
-    ``in_repr`` and ``out_repr`` need to be :class:`~e2cnn.group.Representation` s of :class:`~e2cnn.group.O2`.
-
-    Because the equivariance constraints allow any choice of radial profile, we use a
-    :class:`~e2cnn.diffops.LaplaceProfile`, which is the most general choice.
-    ``max_power`` specifies the maximum power of the Laplacian. The maximum order of differential
-    operators in the basis will be two times ``max_power`` plus the maximum order of the angular basis.
-
-    Because :math:`O(2)` contains all rotations, the reflection element of the group can be associated to any reflection
-    axis. Reflections along other axes can be obtained by composition with rotations.
-    However, a choice of this axis is required to align the basis with respect to the action of the group.
-
-    Args:
-        in_repr (Representation): the representation specifying the transformation of the input feature field
-        out_repr (Representation): the representation specifying the transformation of the output feature field
-        max_power (int): maximum power of the Laplacian for the radial profile
-        axis (float, optional): angle of the axis of the reflection element
-
-    """
-    assert in_repr.group == out_repr.group
-    
-    group = in_repr.group
-    assert isinstance(group, O2)
-    
-    angular_basis = SteerableDiffopBasis(R2FlipsContinuousRotationsSolution, in_repr, out_repr, axis=axis)
-    
-    radial_profile = LaplaceProfile(max_power)
-    
-    return TensorBasis(radial_profile, angular_basis)
-
-
-def diffops_Trivial_act_R2(in_repr: Representation, out_repr: Representation,
-                           max_power: int,
-                           max_frequency: int = None, max_offset: int = None) -> DiffopBasis:
-    r"""
-
-    Builds a basis for unconstrained PDOs.
-    
-    This is equivalent to use :func:`~e2cnn.diffops.diffops_CN_act_R2` with an instance of
-    :class:`~e2cnn.group.CyclicGroup` with ``N=1`` (the trivial group :math:`C_1`).
-    
-    ``in_repr`` and ``out_repr`` need to be associated with an instance of :class:`~e2cnn.group.CyclicGroup` with
-    ``N=1``.
-
-    Because the equivariance constraints allow any choice of radial profile, we use a
-    :class:`~e2cnn.diffops.LaplaceProfile`, which is the most general choice.
-    ``max_power`` specifies the maximum power of the Laplacian. The maximum order of differential
-    operators in the basis will be two times ``max_power`` plus the maximum order of the angular basis.
-
-    The analytical angular solutions of PDO constraints belong to an infinite dimensional space and so can be
-    expressed in terms of infinitely many basis elements. Only a finite subset can however be implemented.
-    ``max_frequency`` and ``max_offset`` defines two ways to do so and therefore it is necessary to specify one of them.
-    See :func:`~e2cnn.diffops.diffops_CN_act_R2` for more details.
-
-    .. todo ::
-        remove ``max_offset`` as it is equivalent to ``max_frequency`` here
-
-
-    Args:
-        in_repr (Representation): the representation specifying the transformation of the input feature field
-        out_repr (Representation): the representation specifying the transformation of the output feature field
-        max_power (int): maximum power of the Laplacian for the radial profile
-        axis (float): angle defining the reflection axis
-        max_frequency (int): maximum frequency of the basis
-        max_offset (int): maximum offset in the frequencies of the basis
-
-    """
-    
-    assert in_repr.group == out_repr.group
-
-    group = in_repr.group
-    assert isinstance(group, CyclicGroup) and group.order() == 1
-
-    angular_basis = SteerableDiffopBasis(R2DiscreteRotationsSolution, in_repr, out_repr,
-                                         max_frequency=max_frequency,
-                                         max_offset=max_offset)
-
-    radial_profile = LaplaceProfile(max_power)
-    
     return TensorBasis(radial_profile, angular_basis)
