@@ -1,8 +1,9 @@
 
 Steerable PDO support for the E2CNN library
 --------------------------------------------------------------------------------
+**[Experiments](https://github.com/ejnnr/steerable_pdo_experiments)** | **[Paper](https://arxiv.org/abs/2106.10163)** | **[Original library](https://github.com/QUVA-Lab/e2cnn)**
 This is a fork of the [*e2cnn* library](https://github.com/QUVA-Lab/e2cnn) that adds support
-for Steerable PDOs, i.e. equivariant partial differential operators.
+for [steerable PDOs](https://arxiv.org/abs/2106.10163), i.e. equivariant partial differential operators.
 
 The main changes are a new `diffops` module that plays the analogous role to `kernels`
 but for PDOs, a `gspace.build_diffop_basis()` method (analogous to `gspace.build_kernel_basis()`)
@@ -20,6 +21,9 @@ pip install git+https://github.com/ejnnr/steerable_pdos
 Note that if you want to use Gaussian or RBF-FD discretization, you will need the
 [RBF library](https://github.com/treverhines/RBF) as an additional optional dependency.
 
+If you want to reproduce our experiments, then do *not* install the library this
+way, instead see our [experiments repository](https://github.com/ejnnr/steerable_pdo_experiments) for instructions.
+
 ## Cite
 
 The original *e2cnn* library was developed as part of the paper
@@ -35,7 +39,19 @@ Please cite this work if you use the library:
 }
 ```
 
-Our paper on Steerable PDOs will be published soon.
+For the implementation of steerable PDOs inside this library, please cite [our paper](https://arxiv.org/abs/2106.10163):
+
+```
+@misc{jenner2021steerable,
+    title={Steerable Partial Differential Operators for Equivariant Neural Networks}, 
+    author={Erik Jenner and Maurice Weiler},
+    year={2021},
+    eprint={2106.10163},
+    archivePrefix={arXiv},
+    primaryClass={cs.LG}
+}
+```
+
 
 ## License
 
