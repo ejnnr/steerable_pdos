@@ -2,6 +2,7 @@
 Steerable PDO support for the E2CNN library
 --------------------------------------------------------------------------------
 **[Experiments](https://github.com/ejnnr/steerable_pdo_experiments)** | **[Paper](https://arxiv.org/abs/2106.10163)** | **[Original library](https://github.com/QUVA-Lab/e2cnn)**
+
 This is a fork of the [*e2cnn* library](https://github.com/QUVA-Lab/e2cnn) that adds support
 for [steerable PDOs](https://arxiv.org/abs/2106.10163), i.e. equivariant partial differential operators.
 
