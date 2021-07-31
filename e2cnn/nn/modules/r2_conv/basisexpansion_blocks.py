@@ -28,6 +28,7 @@ class BlocksBasisExpansion(BasisExpansion):
                  points: np.ndarray,
                  basis_filter: Callable[[dict], bool] = None,
                  recompute: bool = False,
+                 normalize: bool = True,
                  **kwargs
                  ):
         r"""
@@ -43,6 +44,7 @@ class BlocksBasisExpansion(BasisExpansion):
             basis_filter (callable, optional): filter for the basis elements. Should take a dictionary containing an
                                                element's attributes and return whether to keep it or not.
             recompute (bool, optional): whether to recompute new bases or reuse, if possible, already built tensors.
+            normalize (bool, optional): whether to normalize the filters (default is True).
             **kwargs: keyword arguments to be passed to ```basis_generator```
         
         Attributes:
@@ -74,7 +76,7 @@ class BlocksBasisExpansion(BasisExpansion):
                 try:
                     basis = basis_generator(i_repr, o_repr, **kwargs)
                     
-                    block_expansion = block_basisexpansion(basis, points, basis_filter, recompute=recompute)
+                    block_expansion = block_basisexpansion(basis, points, basis_filter, recompute=recompute, normalize=normalize)
                     _block_expansion_modules[reprs_names] = block_expansion
                     
                     # register the block expansion as a submodule
@@ -254,14 +256,24 @@ class BlocksBasisExpansion(BasisExpansion):
                     # attributes adding information specific to the current block
                     for attr in block_expansion.get_basis_info():
                         attr = attr.copy()
-                        attr.update({
-                            "in_irreps_position": in_irreps_count + attr["in_irrep_idx"],
-                            "out_irreps_position": out_irreps_count + attr["out_irrep_idx"],
-                            "in_repr": reprs_names[0],
-                            "out_repr": reprs_names[1],
-                            "in_field_position": i,
-                            "out_field_position": o,
-                        })
+                        # we need this case distinction because if special_regular_basis is used,
+                        # there are no irreps
+                        if "in_irrep_idx" in attr:
+                            attr.update({
+                                "in_irreps_position": in_irreps_count + attr["in_irrep_idx"],
+                                "out_irreps_position": out_irreps_count + attr["out_irrep_idx"],
+                                "in_repr": reprs_names[0],
+                                "out_repr": reprs_names[1],
+                                "in_field_position": i,
+                                "out_field_position": o,
+                            })
+                        else:
+                            attr.update({
+                                "in_repr": reprs_names[0],
+                                "out_repr": reprs_names[1],
+                                "in_field_position": i,
+                                "out_field_position": o,
+                            })
             
                         # build the ids of the basis vectors
                         # add names and indices of the input and output fields

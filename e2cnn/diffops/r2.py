@@ -108,6 +108,8 @@ def diffops_CN_act_R2(in_repr: Representation, out_repr: Representation,
                     max_frequency: int = None,
                     max_offset: int = None,
                     discretization: DiscretizationArgs = DiscretizationArgs(),
+                    special_regular_basis: bool = False,
+                    maximum_partial_order: int = None,
                     ) -> DiffopBasis:
     r"""
 
@@ -160,7 +162,9 @@ def diffops_CN_act_R2(in_repr: Representation, out_repr: Representation,
                        max_power,
                        discretization,
                        max_frequency=max_frequency,
-                       max_offset=max_offset)
+                       max_offset=max_offset,
+                       special_regular_basis=special_regular_basis,
+                       maximum_partial_order=maximum_partial_order)
 
 
 

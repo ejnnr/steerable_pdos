@@ -1,8 +1,6 @@
 
 from .equivariant_module import EquivariantModule
 
-from torch._six import container_abcs
-
 import torch
 
 from typing import List, Iterable
@@ -61,7 +59,7 @@ class ModuleList(torch.nn.ModuleList):
             modules (iterable): iterable of equivariant modules to append
             
         """
-        if not isinstance(modules, container_abcs.Iterable):
+        if not isinstance(modules, Iterable):
             raise TypeError("ModuleList.extend expects an iterable object, but found " + type(modules).__name__)
         
         for module in modules:

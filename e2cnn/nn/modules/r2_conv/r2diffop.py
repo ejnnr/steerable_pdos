@@ -56,6 +56,10 @@ class R2Diffop(EquivariantModule):
                  rbffd: bool = False,
                  radial_basis_function: str = "ga",
                  smoothing: float = None,
+                 special_regular_basis: bool = False,
+                 maximum_partial_order: int = None,
+                 normalize_basis: bool = True,
+                 max_accuracy: int = None,
                  ):
         r"""
         
@@ -197,6 +201,23 @@ class R2Diffop(EquivariantModule):
                 meaning that larger values correspond to stronger smoothing.
                 A reasonable value would be about ``kernel_size / 4`` but you might want to experiment
                 a bit with this parameter.
+            special_regular_basis (bool, optional): if this is set to ``True``, then the type
+                of basis used by PDO-eConvs will be used instead of an irreps-based basis.
+                This only works if all input and output representations are trivial or regular.
+                There are additional limitation, at the moment this option is only designed
+                to work if the exact basis used by PDO-eConvs is replicated.
+            maximum_partial_order (int, optional): this option only works if ``special_regular_basis``
+                is set. It restricts the partial (rather than total) order of PDOs, though
+                with some huge caveats (only the partial order of PODs in the first row of
+                the PDO matrix is restricted).
+                Use ``maximum_partial_order = 2`` for the PDO-eConv basis, there's probably
+                no other case where you'd want to use this.
+            normalize_basis (bool, optional): whether to normalize the filters (default is True).
+            max_accuracy (int, optional): if set, the discretized PDOs will have an order of accuracy
+                no higher than this (with the exception that an odd kernel size is always used).
+                This was only implemented to replicate the PDO-eConv basis, there probably isn't
+                a good reason to use this otherwise. Accuracy is limited by discretizing on only
+                a subset of the available kernel points and padding the remaining kernel with zeros.
         
         Attributes:
             
@@ -221,6 +242,9 @@ class R2Diffop(EquivariantModule):
         if cache and cache != "store":
             # Load the cached lambdas for RBFs if they exist
             load_cache()
+
+        if maximum_partial_order is not None and maximum_order is None:
+            maximum_order = 2 * maximum_partial_order
 
         # out of kernel_size, accuracy and maximum_order, exactly two must be known,
         # the third one can then be determined automatically.
@@ -344,7 +368,11 @@ class R2Diffop(EquivariantModule):
                                                           rbffd,
                                                           radial_basis_function,
                                                           smoothing,
-                                                          angle_offset)
+                                                          angle_offset,
+                                                          special_regular_basis,
+                                                          maximum_partial_order,
+                                                          normalize_basis,
+                                                          max_accuracy)
 
         
         # BasisExpansion: submodule which takes care of building the filter
@@ -374,8 +402,12 @@ class R2Diffop(EquivariantModule):
         self.register_buffer("filter", torch.zeros(out_type.size, in_type.size, kernel_size, kernel_size))
         
         if initialize:
-            # by default, the weights are initialized with a generalized form of He's weight initialization
-            init.generalized_he_init(self.weights.data, self.basisexpansion)
+            if special_regular_basis:
+                # here we need a different init that doesn't rely on irrep information
+                init.pdo_econv_init(self.weights.data, self.basisexpansion)
+            else:
+                # by default, the weights are initialized with a generalized form of He's weight initialization
+                init.generalized_he_init(self.weights.data, self.basisexpansion)
 
         if cache and cache != "load":
             store_cache()
@@ -704,6 +736,10 @@ def compute_basis_params(kernel_size: int,
                          radial_basis_function: str,
                          smoothing: float,
                          angle_offset: float,
+                         special_regular_basis: bool,
+                         maximum_partial_order: int,
+                         normalize_basis: bool,
+                         max_accuracy: int,
                          ):
 
     # compute the coordinates of the centers of the cells in the grid where the filter is sampled
@@ -733,6 +769,7 @@ def compute_basis_params(kernel_size: int,
         smoothing=smoothing,
         angle_offset=angle_offset,
         phi=radial_basis_function,
+        max_accuracy=max_accuracy,
     )
     params = {
         # to guarantee that all relevant tensor products
@@ -743,6 +780,9 @@ def compute_basis_params(kernel_size: int,
         # frequencies higher than than the maximum order will be discarded anyway
         "maximum_frequency": maximum_order,
         "discretization": disc,
+        "normalize": normalize_basis,
+        "maximum_partial_order": maximum_partial_order,
+        "special_regular_basis": special_regular_basis,
     }
 
     return grid, basis_filter, params

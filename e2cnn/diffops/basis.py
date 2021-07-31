@@ -26,11 +26,17 @@ class DiscretizationArgs:
     angle_offset (float, optional): if not ``None``, rotate the PDOs by this many radians.
     phi (str, optional): which RBF to use (only relevant for RBF-FD).
         Can be any of the abbreviations `here <https://rbf.readthedocs.io/en/latest/basis.html>`_.
+    max_accuracy (int, optional): if set, the discretized PDO will have an order of accuracy
+        no higher than this (with the exception that an odd kernel size is always used).
+        This was only implemented to replicate the PDO-eConv basis, there probably isn't
+        a good reason to use this otherwise. Accuracy is limited by discretizing on only
+        a subset of the available kernel points and padding the remaining kernel with zeros.
     """
     method: str = "fd"
     smoothing: Optional[float] = None
     angle_offset: Optional[float] = None
     phi: str = "ga"
+    max_accuracy: Optional[int] = None
 
 
 class DiffopBasis(Basis):
@@ -141,6 +147,7 @@ class DiffopBasis(Basis):
                         self.disc.smoothing,
                         phi=self.disc.phi,
                         method=self.disc.method,
+                        max_accuracy=self.disc.max_accuracy,
                     )
 
         # Finally, we move the len_basis axis to the third position

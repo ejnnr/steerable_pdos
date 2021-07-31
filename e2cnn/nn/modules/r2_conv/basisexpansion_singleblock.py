@@ -16,6 +16,7 @@ class SingleBlockBasisExpansion(BasisExpansion):
                  basis: Basis,
                  points: np.ndarray,
                  basis_filter: Callable[[dict], bool] = None,
+                 normalize: bool = True,
                  ):
         r"""
         
@@ -30,6 +31,7 @@ class SingleBlockBasisExpansion(BasisExpansion):
             points (ndarray): points where the analytical basis should be sampled
             basis_filter (callable, optional): filter for the basis elements. Should take a dictionary containing an
                                                element's attributes and return whether to keep it or not.
+            normalize (bool, optional): whether to normalize the filters (default is True).
             
         """
 
@@ -64,11 +66,12 @@ class SingleBlockBasisExpansion(BasisExpansion):
         mask = mask.astype(np.uint8)
         mask = torch.tensor(mask)
 
-        # normalize the basis
-        sizes = torch.tensor(sizes, dtype=sampled_basis.dtype)
-        assert sizes.shape[0] == mask.to(torch.int).sum(), sizes.shape
-        assert sizes.shape[0] == sampled_basis.shape[0], (sizes.shape, sampled_basis.shape)
-        sampled_basis = normalize_basis(sampled_basis, sizes)
+        if normalize:
+            # normalize the basis
+            sizes = torch.tensor(sizes, dtype=sampled_basis.dtype)
+            assert sizes.shape[0] == mask.to(torch.int).sum(), sizes.shape
+            assert sizes.shape[0] == sampled_basis.shape[0], (sizes.shape, sampled_basis.shape)
+            sampled_basis = normalize_basis(sampled_basis, sizes)
 
         # discard the basis which are close to zero everywhere
         norms = (sampled_basis ** 2).reshape(sampled_basis.shape[0], -1).sum(1) > 1e-2
@@ -94,15 +97,27 @@ class SingleBlockBasisExpansion(BasisExpansion):
                 radial_info = attr["order"]
             else:
                 raise ValueError("No radial information found.")
-            id = '({}-{},{}-{})_({}/{})_{}'.format(
-                    attr["in_irrep"], attr["in_irrep_idx"],  # name and index within the field of the input irrep
-                    attr["out_irrep"], attr["out_irrep_idx"],  # name and index within the field of the output irrep
-                    radial_info,
-                    attr["frequency"],  # frequency of the basis element
-                    # int(np.abs(attr["frequency"])),  # absolute frequency of the basis element
-                    attr["inner_idx"],
-                    # index of the basis element within the basis of radially independent kernels between the irreps
-                )
+            
+            # we need this case distinction because if special_regular_basis is used,
+            # there are no irreps
+            if "in_irrep" in attr:
+                id = '({}-{},{}-{})_({}/{})_{}'.format(
+                        attr["in_irrep"], attr["in_irrep_idx"],  # name and index within the field of the input irrep
+                        attr["out_irrep"], attr["out_irrep_idx"],  # name and index within the field of the output irrep
+                        radial_info,
+                        attr["frequency"],  # frequency of the basis element
+                        # int(np.abs(attr["frequency"])),  # absolute frequency of the basis element
+                        attr["inner_idx"],
+                        # index of the basis element within the basis of radially independent kernels between the irreps
+                    )
+            else:
+                id = 'special_regular_({}/{})_{}'.format(
+                        radial_info,
+                        attr["frequency"],  # frequency of the basis element
+                        # int(np.abs(attr["frequency"])),  # absolute frequency of the basis element
+                        attr["inner_idx"],
+                        # index of the basis element within the basis of radially independent kernels between the irreps
+                    )
             attr["id"] = id
             self._ids_to_idx[id] = idx
             self._idx_to_ids.append(id)
@@ -151,7 +166,8 @@ _stored_filters = {}
 def block_basisexpansion(basis: Basis,
                          points: np.ndarray,
                          basis_filter: Callable[[dict], bool] = None,
-                         recompute: bool = False
+                         recompute: bool = False,
+                         normalize: bool = True,
                          ) -> SingleBlockBasisExpansion:
     r"""
     
@@ -166,6 +182,7 @@ def block_basisexpansion(basis: Basis,
                                            element's attributes and return whether to keep it or not.
         recompute (bool, optional): whether to recompute new bases (```True```) or reuse, if possible,
                                     already built tensors (```False```, default).
+        normalize (bool, optional): whether to normalize the filters (default is True).
 
     """
     
@@ -175,14 +192,14 @@ def block_basisexpansion(basis: Basis,
         for b, attr in enumerate(basis):
             mask[b] = basis_filter(attr)
         
-        key = (basis, mask.tobytes(), points.tobytes())
+        key = (basis, mask.tobytes(), points.tobytes(), normalize)
         if key not in _stored_filters:
-            _stored_filters[key] = SingleBlockBasisExpansion(basis, points, basis_filter)
+            _stored_filters[key] = SingleBlockBasisExpansion(basis, points, basis_filter, normalize)
         
         return _stored_filters[key]
     
     else:
-        return SingleBlockBasisExpansion(basis, points, basis_filter)
+        return SingleBlockBasisExpansion(basis, points, basis_filter, normalize)
 
 
 def normalize_basis(basis: torch.Tensor, sizes: torch.Tensor) -> torch.Tensor:

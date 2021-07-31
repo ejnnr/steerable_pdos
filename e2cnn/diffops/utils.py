@@ -1,5 +1,5 @@
 
-from typing import List, Union, Iterable, Tuple
+from typing import List, Optional, Union, Iterable, Tuple
 import os
 import warnings
 import pickle
@@ -67,6 +67,7 @@ def discretize_homogeneous_polynomial(
         smoothing: float = None,
         phi: str = "ga",
         method: str = "fd",
+        max_accuracy: int = None,
 ) -> np.ndarray:
     r"""Discretize a homogeneous partial differential operator.
     Homogeneous means that all terms have the same derivative order.
@@ -80,7 +81,7 @@ def discretize_homogeneous_polynomial(
 
     targets = np.array([[0, 0]])
 
-    key = (points.tobytes(), coefficients.tobytes(), smoothing, phi, method)
+    key = (points.tobytes(), coefficients.tobytes(), smoothing, phi, method, max_accuracy)
     if key in _DIFFOP_CACHE:
         return _DIFFOP_CACHE[key]
 
@@ -97,6 +98,11 @@ def discretize_homogeneous_polynomial(
     if method == "gauss":
         if smoothing is None:
             raise ValueError("smoothing must be set when method = 'gauss'")
+        if max_accuracy is not None:
+            raise NotImplementedError(
+                "Restricting the accuracy is not implemented for "
+                "derivatives of Gaussians."
+            )
         if not _RBF_AVAILABLE:
             raise RuntimeError("Using derivatives of Gaussians for discretization "
                                "requires the RBF package, please install it. "
@@ -127,7 +133,7 @@ def discretize_homogeneous_polynomial(
             [
                 # type checkers get confused by expanding diff, but we know
                 # that it has length 2.
-                discretize_2d_monomial(*diff, axis_points) # type: ignore
+                discretize_2d_monomial(*diff, axis_points, max_accuracy) # type: ignore
                 for diff in diffs
             ]
         ).reshape(-1, num_points)
@@ -141,6 +147,11 @@ def discretize_homogeneous_polynomial(
             raise RuntimeError("Using RBF-FD for discretization "
                                "requires the RBF package, please install it. "
                                "See https://github.com/treverhines/RBF for instructions.")
+        if max_accuracy is not None:
+            raise ValueError(
+                "Restricting the accuracy is not implemented for RBF-FD."
+            )
+        # points is an array, so we use RBF-FD
         out = weight_matrix(targets, points.T, num_points, diffs, coefficients[nonzero], phi=phi)
         if np.any(np.isnan(out.data)):
             raise Exception(f"NaNs encountered while discretizing diffop {display_diffop(coefficients)} on {num_points} points.\n"
@@ -164,7 +175,7 @@ def discretize_homogeneous_polynomial(
     return out
 
 
-def discretize_1d_monomial(n: int, points: List[float]) -> np.ndarray:
+def discretize_1d_monomial(n: int, points: List[float], max_accuracy: int = None) -> np.ndarray:
     """Discretize the differential operator d^n/dx^n as a convolutional kernel."""
     # calculating the finite difference coefficients using sympy is fast,
     # but given that this function is called extremely often when sampling
@@ -172,11 +183,31 @@ def discretize_1d_monomial(n: int, points: List[float]) -> np.ndarray:
     # of differential operators (because that one only caches something
     # if exactly the same operator appears multiple times).
     # So we use an additional cache here, which caches single monomials.
-    key = (n, tuple(points))
+    key = (n, tuple(points), max_accuracy)
     if key not in _1D_KERNEL_CACHE:
         assert n < len(points), (f"Can't discretize differential operator of order {n} on {len(points)} points, "
                                 f"at least {n + 1} points are needed")
-        _1D_KERNEL_CACHE[key] = fd_weights(n, points)
+        if max_accuracy is None:
+            _1D_KERNEL_CACHE[key] = fd_weights(n, points)
+        else:
+            num_points = required_points(n, max_accuracy)
+            # make number of points odd
+            # HACK: this is probably not what we want in all scenarios,
+            # but it is what we want for PDO-eConvs
+            if num_points % 2 == 0:
+                num_points += 1
+            assert num_points <= len(points), (f"Can't achieve desired accuracy order {max_accuracy} "
+                                               f"for differential operator of order {n}, "
+                                               f"at least {num_points} points are needed")
+            # we want to roughly use the middle portion of the given points,
+            # because points are usually chosen symmetrically around 0
+            full_size = len(points)
+            offset = (full_size - num_points) // 2
+            points = points[offset:offset + num_points]
+            result = np.zeros(full_size)
+            result[offset:offset + num_points] = fd_weights(n, points)
+            _1D_KERNEL_CACHE[key] = result
+
     return _1D_KERNEL_CACHE[key]
 
 
@@ -190,10 +221,11 @@ def fd_weights(n, points):
 def discretize_2d_monomial(n_x: int,
                            n_y: int,
                            points: Tuple[List[float], List[float]],
+                           max_accuracy: int = None
                            ) -> np.ndarray:
     """Discretize the differential operator d^{n_x + n_y}/{dx^n_x dy^n_y}."""
-    x_kernel = discretize_1d_monomial(n_x, points[0])
-    y_kernel = discretize_1d_monomial(n_y, points[1])
+    x_kernel = discretize_1d_monomial(n_x, points[0], max_accuracy)
+    y_kernel = discretize_1d_monomial(n_y, points[1], max_accuracy)
     return x_kernel[:, None] * y_kernel[None, :]
 
 
@@ -446,3 +478,32 @@ def symmetric_points(n: int, dilation: float = 1) -> List[float]:
     points = range(n)
     offset = (n - 1) / 2
     return [(x - offset) * dilation for x in points]
+
+# See https://stackoverflow.com/questions/47269390/numpy-how-to-find-first-non-zero-value-in-every-column-of-a-numpy-array
+def first_nonzero(arr, axis, invalid_val=-1):
+    mask = (arr != 0)
+    return np.where(mask.any(axis=axis), mask.argmax(axis=axis), invalid_val)
+
+def last_nonzero(arr, axis, invalid_val=-1):
+    mask = (arr != 0)
+    val = arr.shape[axis] - np.flip(mask, axis=axis).argmax(axis=axis) - 1
+    return np.where(mask.any(axis=axis), val, invalid_val)
+
+def max_partial_orders(coefficients: np.ndarray):
+    """Compute the maximum partial derivative order of a PDO.
+    Args:
+        coefficients (ndarray): coefficients in the homogeneous format.
+            Last axis should contain coefficients. Maximum of the derivative
+            orders will be taken over previous axes.
+    
+    Returns:
+        Tuple (max_x, max_y), where max_{direction} is the maximum power
+        with which d/d{direction} occurs.
+        
+        Careful: these are floats because they may be negative infinity!
+        (for the zero operator)"""
+    order = coefficients.shape[-1] - 1
+    assert order >= 0
+    max_x = order - first_nonzero(coefficients, -1, invalid_val=np.inf).min()
+    max_y = last_nonzero(coefficients, -1, -np.inf).max()
+    return max_x, max_y

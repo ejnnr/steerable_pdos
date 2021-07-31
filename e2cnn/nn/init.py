@@ -158,3 +158,43 @@ def deltaorthonormal_init(tensor: torch.Tensor, basisexpansion: BasisExpansion):
                 for p, pp in enumerate(count[(ip, op)]):
                     tensor[pp] = w[o, p] * W[o, i]
 
+def pdo_econv_init(tensor: torch.Tensor, basisexpansion: BasisExpansion):
+    assert tensor.shape == (basisexpansion.dimension(), )
+    in_size = basisexpansion._input_size
+    out_size = len(basisexpansion._out_type)
+
+    # this init is tailored to a particular basis, it won't work for others
+    assert all(r.name == "regular" or r.name == "irrep_0" for r in basisexpansion._in_type.representations)
+    assert all(r.name == "regular" or r.name == "irrep_0" for r in basisexpansion._out_type.representations)
+    assert basisexpansion.dimension() == in_size * out_size * 9, f"Expected {in_size * out_size * 9} weights, got {basisexpansion.dimension()}"
+
+    # indices of each first channel
+    indices = torch.from_numpy(basisexpansion._out_type.fields_start.astype(int))
+
+    xavier_weights = torch.empty(out_size, in_size, 3, 3)
+    torch.nn.init.xavier_normal_(xavier_weights)
+
+    # what we need to solve is just a linear system,
+    # but explicitly setting that up is pretty error-prone.
+    # Instead, we use gradient descent to find an approximate solution
+    weights = torch.randn_like(tensor, requires_grad=True)
+    optimizer = torch.optim.Adam([weights], lr=1)
+    scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, 0.8)
+    for i in range(100):
+        optimizer.zero_grad()
+        filters = basisexpansion(weights).reshape(basisexpansion._output_size, in_size, 5, 5)
+        filters = filters[indices]
+        # take only the middle 3x3 part
+        filters = filters[:, :, 1:-1, 1:-1]
+        loss = ((filters - xavier_weights)**2).mean()
+        loss.backward()
+        optimizer.step()
+        if loss.item() < 1e-4:
+            break
+        if i % 10 == 0:
+            scheduler.step()
+
+    if loss.item() > 1e-3:
+        warnings.warn(f"Init not converged: final loss is {loss.item()}")
+
+    tensor[:] = weights.detach()

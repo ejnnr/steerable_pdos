@@ -174,6 +174,8 @@ class Rot2dOnR2(GeneralOnR2):
             maximum_frequency (int): the maximum frequency allowed in the basis vectors
             maximum_offset (int): the maximum frequencies offset for each basis vector with respect to its base ones
                                   (sum and difference of the frequencies of the input and the output representations)
+            special_regular_basis (bool): see :class:`~e2cnn.diffops.SteerableDiffopBasis`. Only supported for C_N
+            maximum_partial_order (int): see :class:`~e2cnn.diffops.SteerableDiffopBasis`. Only supported for C_N
 
         Returns:
             the basis built
@@ -194,10 +196,21 @@ class Rot2dOnR2(GeneralOnR2):
     
             assert (maximum_frequency is not None or maximum_offset is not None), \
                 'Error! Either the maximum frequency or the maximum offset for the frequencies must be set'
+
+            if "special_regular_basis" in kwargs:
+                special_regular_basis = kwargs["special_regular_basis"]
+            else:
+                special_regular_basis = False
+            if "maximum_partial_order" in kwargs:
+                maximum_partial_order = kwargs["maximum_partial_order"]
+            else:
+                maximum_partial_order = None
             
             return diffops.diffops_CN_act_R2(in_repr, out_repr, max_power,
                                              maximum_frequency,
-                                             max_offset=maximum_offset)
+                                             max_offset=maximum_offset,
+                                             special_regular_basis=special_regular_basis,
+                                             maximum_partial_order=maximum_partial_order)
         else:
             return diffops.diffops_SO2_act_R2(in_repr, out_repr, max_power)
 
