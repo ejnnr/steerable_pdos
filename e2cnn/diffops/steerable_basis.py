@@ -7,6 +7,7 @@ from e2cnn.diffops.utils import transform_polynomial
 from e2cnn.group import Representation, SO2, CyclicGroup
 
 from .basis import DiffopBasis, DiscretizationArgs
+from .utils import max_partial_orders
 
 from typing import Type, List
 
