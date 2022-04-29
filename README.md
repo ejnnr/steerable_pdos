@@ -5,22 +5,17 @@ Steerable PDO support for the E2CNN library
 
 This is a fork of the [*e2cnn* library](https://github.com/QUVA-Lab/e2cnn) that adds support
 for [steerable PDOs](https://arxiv.org/abs/2106.10163), i.e. equivariant partial differential operators.
+**Support for steerable PDOs has been merged into e2cnn, you should simply use the original library rather than this fork.**
 
 The main changes are a new `diffops` module that plays the analogous role to `kernels`
 but for PDOs, a `gspace.build_diffop_basis()` method (analogous to `gspace.build_kernel_basis()`)
 and the equivariant `nn.R2Diffop` module (a drop-in replacement for `nn.R2Conv`).
 
 If you have questions specifically about Steerable PDOs and this implementation,
-please [contact me](mailto:erik.jenner99@gmail.com).
+please [contact me](mailto:erik@ejenner.com).
 
 ## Installation
-The original *e2cnn* library can be installed with `pip install e2cnn`.
-If you want to install the main branch of this fork, use
-```
-pip install git+https://github.com/ejnnr/steerable_pdos
-```
-Note that if you want to use Gaussian or RBF-FD discretization, you will need the
-[RBF library](https://github.com/treverhines/RBF) as an additional optional dependency.
+The original *e2cnn* library can be installed with `pip install e2cnn` and now contains support for steerable PDOs.
 
 If you want to reproduce our experiments, then do *not* install the library this
 way, instead see our [experiments repository](https://github.com/ejnnr/steerable_pdo_experiments) for instructions.
@@ -43,13 +38,11 @@ Please cite this work if you use the library:
 For the implementation of steerable PDOs inside this library, please cite [our paper](https://arxiv.org/abs/2106.10163):
 
 ```
-@misc{jenner2021steerable,
-    title={Steerable Partial Differential Operators for Equivariant Neural Networks}, 
-    author={Erik Jenner and Maurice Weiler},
-    year={2021},
-    eprint={2106.10163},
-    archivePrefix={arXiv},
-    primaryClass={cs.LG}
+@inproceedings{jenner2021steerable,
+      title={Steerable Partial Differential Operators for Equivariant Neural Networks},
+      author={Erik Jenner and Maurice Weiler},
+      year={2022},
+      booktitle={ICLR},
 }
 ```
 
